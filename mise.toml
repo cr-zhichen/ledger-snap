@@ -39,6 +39,11 @@ description = "按 testdata/screens/labels.json 评测识别效果；参数放�
 depends = ["build"]
 run = "set -a && . ./.env.local && set +a && harmonia exec -- ./bin/ledger-snap eval"
 
+[tasks.shortcut]
+description = "生成并签名快捷指令到 dist/截图记账.shortcut（需要 macOS）；参数放在 -- 之后，例如 --server https://snap.example.com"
+depends = ["build"]
+run = "./bin/ledger-snap shortcut"
+
 [tasks."docker:up"]
 description = "按 .env 构建并启动 Docker 服务"
 run = "docker compose up -d --build"

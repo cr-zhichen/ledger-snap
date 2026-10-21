@@ -1,6 +1,6 @@
 # ledger-snap
 
-iPhone 上轻点背面截图，服务端识别截图里的交易并写入钱迹。设计见 [docs/design.md](docs/design.md)，快捷指令的搭法见 [docs/shortcut.md](docs/shortcut.md)。
+iPhone 上轻点背面截图，服务端识别截图里的交易并写入钱迹。设计见 [docs/design.md](docs/design.md)，快捷指令的生成、安装和使用见 [docs/shortcut.md](docs/shortcut.md)。
 
 ## 流程
 
@@ -8,7 +8,9 @@ iPhone 上轻点背面截图，服务端识别截图里的交易并写入钱迹�
 2. 服务端调 OCR（火山多语种 OCR、谷歌或百度），从文字里列出金额和时间候选。
 3. 一次决策模型请求同时判断：是否成功交易、收支类型、金额、时间、分类、账户、商户。默认经 OpenRouter 调用 Jev 1.14，也可以在 `config.toml` 里把 `decision.provider` 改成 `typesafe`，直接调用 TypeSafe 官方接口。
 4. 判断不准时，交给视觉 LLM 兜底（默认 Claude Haiku 5.5）。
-5. 写入钱迹，返回摘要；快捷指令弹出「确认 / 修改 / 删除」，修改时可以直接选账户、收支类型、分类，改金额，或用一句话改。有拿不准的字段时先不写入，等用户确认（或修改后确认）再入库。
+5. 写入钱迹，返回摘要；快捷指令弹出「确认 / 修改 / 删除」，修改时可以直接选账户、收支类型、分类，改金额、时间，或用一句话改。有拿不准的字段时先不写入，等用户确认（或修改后确认）再入库。
+
+快捷指令里的每个对话框都由服务端决定，快捷指令本身只是一个循环，改流程不用重装。
 
 转给别人和发红包记为支出，收到别人的转账和红包记为收入；只有自己账户之间的转账（提现、充值、转入余额宝等）记为转账，还信用卡、花呗记为信用卡还款。退款暂不自动记录。
 
@@ -43,6 +45,7 @@ mise run serve
 | `ledger-snap ocr --provider volcano,google,baidu <图片>` | 对比 OCR 结果 |
 | `ledger-snap recognize <图片>...` | 用测试账号的分类和资产识别截图，不写入钱迹 |
 | `ledger-snap eval` | 按 `testdata/screens/labels.json` 评测准确率、耗时和费用 |
+| `ledger-snap shortcut` | 生成并签名快捷指令到 `dist/截图记账.shortcut`（需要 macOS），也可以用 `mise run shortcut` |
 | `ledger-snap version` | 打印版本号（发布镜像时由标签注入） |
 | `ledger-snap qianji-smoke` | 测试账号登录，并新增、修改、删除一笔 0.01 元账单 |
 | `ledger-snap seed-assets` | 在测试账号里新建一批容易混淆的账户（已存在的跳过） |
@@ -123,10 +126,12 @@ docker compose up -d
 
 ## HTTP 接口
 
+快捷指令只用 `/v1/flow/` 下的三个接口，说明见 [docs/shortcut.md](docs/shortcut.md#工作原理)。下面这些接口按状态码返回结果，适合脚本或自己搭的快捷指令调用：
+
 | 接口 | 说明 |
 | --- | --- |
 | `POST /v1/login` | JSON `account`、`password_md5`、`invite_code`，返回 `token` |
-| `POST /v1/recognize` | multipart，字段 `image`，可选 `client_time`（Unix 秒） |
+| `POST /v1/recognize` | 请求体是截图本身，或 multipart 的 `image` 字段；可选 `client_time`（Unix 秒） |
 | `GET /v1/options` | 选择器用的账户、分类、类型名称 |
 | `POST /v1/catalog/refresh` | 立即从钱迹重新拉取分类和账户；修改时名字找不到也会自动刷新一次 |
 | `POST /v1/records/{id}/update` | JSON，按名称修改 `kind`、`category`、`asset`、`target_asset`、`money`、`time`、`remark` |

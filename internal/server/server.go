@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -34,6 +35,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/records/{id}", s.auth(s.remove))
 	// The shortcut's "Get Contents of URL" handles POST more reliably than DELETE.
 	mux.HandleFunc("POST /v1/records/{id}/delete", s.auth(s.remove))
+	// The generated shortcut talks only to these; see flow.go.
+	mux.HandleFunc("POST /v1/flow/login", s.flowLogin)
+	mux.HandleFunc("POST /v1/flow/recognize", s.flowAuth(s.flowRecognize))
+	mux.HandleFunc("POST /v1/flow/{id}/{step...}", s.flowAuth(s.flowStep))
 	return s.logRequests(mux)
 }
 
@@ -41,14 +46,18 @@ type authed func(w http.ResponseWriter, r *http.Request, u *store.User)
 
 func (s *Server) auth(next authed) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		u, err := s.App.Authenticate(r.Context(), strings.TrimSpace(token))
+		u, err := s.App.Authenticate(r.Context(), bearer(r))
 		if err != nil {
 			s.fail(w, r, err)
 			return
 		}
 		next(w, r, u)
 	}
+}
+
+func bearer(r *http.Request) string {
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return strings.TrimSpace(token)
 }
 
 // field reads a value from a JSON body or a form, whichever the client sent.
@@ -79,22 +88,39 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) recognize(w http.ResponseWriter, r *http.Request, u *store.User) {
-	limit := s.App.Config.Server.MaxUploadMB << 20
-	r.Body = http.MaxBytesReader(w, r.Body, limit)
-	if err := r.ParseMultipartForm(limit); err != nil {
-		s.fail(w, r, &app.UserError{Status: 400, Message: "需要以 multipart 表单上传 image 字段"})
-		return
-	}
-	file, _, err := r.FormFile("image")
-	if err != nil {
-		s.fail(w, r, &app.UserError{Status: 400, Message: "缺少 image 字段"})
-		return
-	}
-	defer file.Close()
-	image, err := io.ReadAll(file)
+	image, upload, err := s.readImage(w, r)
 	if err != nil {
 		s.fail(w, r, err)
 		return
+	}
+	res, err := s.App.Recognize(r.Context(), u, image, upload)
+	s.reply(w, r, res, err)
+}
+
+// readImage takes the screenshot from a multipart "image" field or, as the
+// generated shortcut sends it, from the raw request body.
+func (s *Server) readImage(w http.ResponseWriter, r *http.Request) ([]byte, time.Time, error) {
+	limit := s.App.Config.Server.MaxUploadMB << 20
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	var image []byte
+	var err error
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
+		image, err = formImage(r, limit)
+	} else {
+		image, err = io.ReadAll(r.Body)
+	}
+	var tooLarge *http.MaxBytesError
+	var ue *app.UserError
+	switch {
+	case errors.As(err, &tooLarge):
+		return nil, time.Time{}, &app.UserError{Status: http.StatusRequestEntityTooLarge, Message: fmt.Sprintf("截图超过 %d MB", s.App.Config.Server.MaxUploadMB)}
+	case errors.As(err, &ue):
+		return nil, time.Time{}, err
+	case err != nil:
+		return nil, time.Time{}, &app.UserError{Status: 400, Message: "读取截图失败：" + err.Error()}
+	}
+	if len(image) == 0 {
+		return nil, time.Time{}, &app.UserError{Status: 400, Message: "没有收到截图"}
 	}
 	upload := time.Now()
 	if v := r.FormValue("client_time"); v != "" {
@@ -102,8 +128,19 @@ func (s *Server) recognize(w http.ResponseWriter, r *http.Request, u *store.User
 			upload = time.Unix(sec, 0)
 		}
 	}
-	res, err := s.App.Recognize(r.Context(), u, image, upload)
-	s.reply(w, r, res, err)
+	return image, upload, nil
+}
+
+func formImage(r *http.Request, limit int64) ([]byte, error) {
+	if err := r.ParseMultipartForm(limit); err != nil {
+		return nil, err
+	}
+	file, _, err := r.FormFile("image")
+	if err != nil {
+		return nil, &app.UserError{Status: 400, Message: "缺少 image 字段"}
+	}
+	defer file.Close()
+	return io.ReadAll(file)
 }
 
 func (s *Server) confirm(w http.ResponseWriter, r *http.Request, u *store.User) {

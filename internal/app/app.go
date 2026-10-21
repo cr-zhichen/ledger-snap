@@ -183,6 +183,19 @@ type Result struct {
 	Summary   string   `json:"summary"`
 	Reason    string   `json:"reason,omitempty"`
 	Uncertain []string `json:"uncertain,omitempty"`
+	Money     string   `json:"money,omitempty"`
+	Time      string   `json:"time,omitempty"` // TimeLayout
+}
+
+// TimeLayout is how times are shown to and typed by the user.
+const TimeLayout = "2006-01-02 15:04"
+
+func (s *Service) result(rec *store.Record, d *recognize.Draft) *Result {
+	res := &Result{RecordID: rec.ID, Status: rec.Status, Kind: d.Kind.Label(), Summary: rec.Summary, Uncertain: d.Uncertain}
+	if rec.Summary != "" {
+		res.Money, res.Time = d.Money, d.Time.In(s.Config.Location()).Format(TimeLayout)
+	}
+	return res
 }
 
 func (s *Service) Recognize(ctx context.Context, u *store.User, image []byte, upload time.Time) (*Result, error) {
@@ -230,13 +243,13 @@ var fieldNames = map[string]string{"category": "分类", "asset": "账户", "tar
 // settle writes a draft (or records why not) and stores the record.
 func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, draft *recognize.Draft, catalog qianji.Catalog, mode settleMode) (*Result, error) {
 	rec.Draft = toJSON(draft)
-	res := &Result{RecordID: rec.ID, Uncertain: draft.Uncertain, Kind: draft.Kind.Label()}
-	hold := func(reason string) { rec.Status, res.Reason = "needs_confirm", reason }
+	reason := ""
+	hold := func(why string) { rec.Status, reason = "needs_confirm", why }
 	switch {
 	case draft.Status != "ok":
-		rec.Status, res.Reason = "rejected", draft.Reason
+		rec.Status, reason = "rejected", draft.Reason
 	case draft.Kind == recognize.KindRefund:
-		rec.Status, res.Reason = "rejected", "这是一笔退款，暂不支持自动记录，请在钱迹的原账单上添加退款"
+		rec.Status, reason = "rejected", "这是一笔退款，暂不支持自动记录，请在钱迹的原账单上添加退款"
 	default:
 		rec.Summary = Summary(draft, catalog, s.Config.Location())
 		if why := transferProblem(draft, catalog); why != "" {
@@ -270,11 +283,15 @@ func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, 
 		}
 		rec.Status = "written"
 	}
-	res.Status, res.Summary = rec.Status, rec.Summary
-	if res.Summary == "" {
-		res.Summary = res.Reason
+	if err := s.Store.SaveRecord(ctx, rec); err != nil {
+		return nil, err
 	}
-	return res, s.Store.SaveRecord(ctx, rec)
+	res := s.result(rec, draft)
+	res.Reason = reason
+	if res.Summary == "" {
+		res.Summary = reason
+	}
+	return res, nil
 }
 
 func (s *Service) duplicate(ctx context.Context, u *store.User, d *recognize.Draft) (*store.Record, error) {
@@ -392,6 +409,19 @@ func (s *Service) loadRecord(ctx context.Context, u *store.User, id string) (*st
 		return nil, nil, err
 	}
 	return rec, &d, nil
+}
+
+// Current reports a record as it stands, to show it again.
+func (s *Service) Current(ctx context.Context, u *store.User, id string) (*Result, error) {
+	rec, d, err := s.loadRecord(ctx, u, id)
+	if err != nil {
+		return nil, err
+	}
+	res := s.result(rec, d)
+	if rec.Status == "needs_confirm" {
+		res.Reason = "还没记账，确认无误点确认"
+	}
+	return res, nil
 }
 
 // Confirm writes a record that was held back, e.g. as a possible duplicate.
@@ -548,7 +578,8 @@ type Options struct {
 	AssetsOrNone []string `json:"assets_or_none"`
 }
 
-var kindNames = []recognize.Kind{recognize.KindExpense, recognize.KindIncome, recognize.KindTransfer, recognize.KindCredit}
+// Kinds are the bill kinds a user can pick, in menu order.
+var Kinds = []recognize.Kind{recognize.KindExpense, recognize.KindIncome, recognize.KindTransfer, recognize.KindCredit}
 
 // assetLabels gives every asset a unique display name.
 func assetLabels(c qianji.Catalog) map[string]string {
@@ -573,7 +604,7 @@ func (s *Service) Options(ctx context.Context, u *store.User) (*Options, error) 
 		return nil, err
 	}
 	o := &Options{}
-	for _, k := range kindNames {
+	for _, k := range Kinds {
 		o.Kinds = append(o.Kinds, k.Label())
 	}
 	for _, cat := range c.Leaves(qianji.TypeExpense) {
@@ -598,7 +629,7 @@ type Patch struct {
 	Asset       string `json:"asset"`
 	TargetAsset string `json:"target_asset"`
 	Money       string `json:"money"`
-	Time        string `json:"time"` // 2006-01-02 15:04
+	Time        string `json:"time"` // TimeLayout
 	Remark      string `json:"remark"`
 }
 
@@ -610,7 +641,7 @@ func (s *Service) applyPatch(d *recognize.Draft, p Patch, c qianji.Catalog) (*re
 	out.Uncertain = nil
 	if p.Kind != "" {
 		found := false
-		for _, k := range kindNames {
+		for _, k := range Kinds {
 			if p.Kind == k.Label() || p.Kind == string(k) {
 				out.Kind, found = k, true
 			}
@@ -677,9 +708,9 @@ func (s *Service) applyPatch(d *recognize.Draft, p Patch, c qianji.Catalog) (*re
 		out.Money = strconv.FormatFloat(v, 'f', 2, 64)
 	}
 	if p.Time != "" {
-		t, err := time.ParseInLocation("2006-01-02 15:04", strings.TrimSpace(p.Time), s.Config.Location())
+		t, err := time.ParseInLocation(TimeLayout, strings.TrimSpace(p.Time), s.Config.Location())
 		if err != nil {
-			return nil, userErr(400, "时间格式应为 2006-01-02 15:04")
+			return nil, userErr(400, "时间格式不对，应该像 2026-10-21 12:30 这样")
 		}
 		out.Time, out.TimeSource = t, "manual"
 	}
