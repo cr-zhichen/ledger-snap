@@ -90,6 +90,9 @@ type Trace struct {
 	FallbackError string                        `json:"fallback_error,omitempty"`
 	FallbackWhy   string                        `json:"fallback_why,omitempty"`
 	MemoryHits    []string                      `json:"memory_hits,omitempty"`
+	// CatalogRefresh notes a catalog refresh after the first try matched no
+	// account or category, and what came of it.
+	CatalogRefresh string `json:"catalog_refresh,omitempty"`
 	// Truncated lists option lists cut to fit the per-question limits.
 	Truncated []string `json:"truncated,omitempty"`
 	TotalMs   int64    `json:"total_ms"`
@@ -115,6 +118,8 @@ type Input struct {
 	UploadTime time.Time
 	Catalog    qianji.Catalog
 	Memory     Memory
+	// Lines reuses an earlier OCR result of the same image; nil runs OCR.
+	Lines []ocr.Line
 }
 
 func (r *Recognizer) Recognize(ctx context.Context, in Input) (*Draft, *Trace, error) {
@@ -124,10 +129,15 @@ func (r *Recognizer) Recognize(ctx context.Context, in Input) (*Draft, *Trace, e
 	trace := &Trace{OCRProvider: r.OCR.Name(), DecisionModel: cfg.Decision.Provider + ":" + cfg.Decision.Model}
 	defer func() { trace.TotalMs = time.Since(start).Milliseconds() }()
 
-	lines, took, err := ocr.Timed(ctx, r.OCR, in.Image)
-	trace.OCRMs = took.Milliseconds()
-	if err != nil {
-		return nil, trace, err
+	lines := in.Lines
+	var err error
+	if lines == nil {
+		var took time.Duration
+		lines, took, err = ocr.Timed(ctx, r.OCR, in.Image)
+		trace.OCRMs = took.Milliseconds()
+		if err != nil {
+			return nil, trace, err
+		}
 	}
 	trace.OCRLines = lines
 	_, imageHeight, _ := imgutil.Size(in.Image)

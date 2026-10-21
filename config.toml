@@ -18,7 +18,7 @@ market = "beta"
 os_version = "36"
 device_brand = "LedgerSnap"
 device_name = "LedgerSnap"
-# 分类、资产目录超过这个时长就重新拉取
+# 分类、资产目录超过这个时长就重新拉取；识别时没认出账户或分类，也会提前拉取一次
 catalog_ttl = "6h"
 
 [ocr]

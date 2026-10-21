@@ -65,6 +65,16 @@ func TestMoneyOf(t *testing.T) {
 			},
 		},
 		{
+			name:  "exchange before the accounts are picked",
+			draft: recognize.Draft{Kind: recognize.KindTransfer, Money: "7881.80", Currency: "HKD", Converted: "1000.00", ConvertedCurrency: "USD"},
+			want: billMoney{
+				Value:    "7881.80",
+				Currency: &qianji.Currency{Source: "HKD", SourceValue: "7881.80", Target: "USD", TargetValue: "1000.00", Base: "CNY", BaseValue: "6719.93"},
+				Other:    "1000.00", OtherCurrency: "USD",
+				Text: "7881.80 HKD → 1000.00 USD",
+			},
+		},
+		{
 			name:  "base currency into a foreign account",
 			draft: recognize.Draft{Kind: recognize.KindTransfer, Money: "1000.00", Currency: "CNY", Converted: "1172.90", AssetID: "cny", TargetID: "hkd"},
 			want: billMoney{

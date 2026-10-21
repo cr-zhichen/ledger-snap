@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"strconv"
@@ -65,13 +66,17 @@ func moneyOf(d *recognize.Draft, c qianji.Catalog) (billMoney, error) {
 	}
 
 	if d.Kind.IsTransfer() {
+		// Until the accounts are picked, take the amounts as shown.
 		from, ok := c.AssetCurrency(d.AssetID)
 		if !ok {
-			from = base
+			from = cmp.Or(first.currency, base)
 		}
 		to, ok := c.AssetCurrency(d.TargetID)
 		if !ok {
 			to = from
+			if second != nil && second.currency != "" {
+				to = second.currency
+			}
 		}
 		if first.currency == "" {
 			first.currency = from

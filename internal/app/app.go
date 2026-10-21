@@ -227,12 +227,16 @@ func (s *Service) Recognize(ctx context.Context, u *store.User, image []byte, up
 	if err != nil {
 		return nil, err
 	}
-	draft, trace, err := s.Recognizer.Recognize(ctx, recognize.Input{
+	input := recognize.Input{
 		Image: image, UploadTime: upload, Catalog: catalog,
 		Memory: recognize.Memory{AssetAliases: mem.AssetAliases, MerchantRules: mem.MerchantRules},
-	})
+	}
+	draft, trace, err := s.Recognizer.Recognize(ctx, input)
 	if err != nil {
 		return nil, err
+	}
+	if unmatched(draft) && time.Since(time.Unix(u.CatalogAt, 0)) >= recheckAfter {
+		draft, trace, catalog = s.recheck(ctx, u, input, draft, trace)
 	}
 	rec := &store.Record{ID: "r_" + randomHex(10), UID: u.UID, CreatedAt: upload.Unix()}
 	rec.ImagePath, err = s.saveImage(u.UID, rec.ID, image)
@@ -241,6 +245,51 @@ func (s *Service) Recognize(ctx context.Context, u *store.User, image []byte, up
 	}
 	rec.Trace = toJSON(trace)
 	return s.settle(ctx, u, rec, draft, catalog, modeNew)
+}
+
+// recheckAfter is how old the catalog must be before an unmatched draft
+// refreshes it; a fresher one already has what the app has.
+const recheckAfter = time.Minute
+
+// unmatched reports a draft whose account or category may be missing from
+// the cached catalog: none was picked, or one was picked without confidence.
+func unmatched(d *recognize.Draft) bool {
+	if d.Status != "ok" || d.Kind == recognize.KindRefund {
+		return false
+	}
+	for _, field := range []string{"asset", "target_asset", "category"} {
+		if slices.Contains(d.Uncertain, field) {
+			return true
+		}
+	}
+	if d.Kind.IsTransfer() {
+		return d.AssetID == "" || d.TargetID == ""
+	}
+	return d.AssetID == "" || d.CategoryID == ""
+}
+
+// recheck refreshes the catalog once for an unmatched draft, in case the
+// account or category was added in the app since it was cached, and
+// recognizes again with the same OCR result when the catalog changed.
+func (s *Service) recheck(ctx context.Context, u *store.User, in recognize.Input, d *recognize.Draft, tr *recognize.Trace) (*recognize.Draft, *recognize.Trace, qianji.Catalog) {
+	fresh, err := s.refreshCatalog(ctx, u)
+	if err != nil {
+		tr.CatalogRefresh = "刷新账户和分类失败：" + err.Error()
+		return d, tr, in.Catalog
+	}
+	if slices.Equal(in.Catalog.Assets, fresh.Assets) && slices.Equal(in.Catalog.Categories, fresh.Categories) {
+		tr.CatalogRefresh = "账户和分类没有变化"
+		return d, tr, fresh
+	}
+	in.Catalog, in.Lines = fresh, tr.OCRLines
+	d2, tr2, err := s.Recognizer.Recognize(ctx, in)
+	if err != nil {
+		tr.CatalogRefresh = "账户和分类有更新，重新识别失败：" + err.Error()
+		return d, tr, fresh
+	}
+	tr2.OCRMs, tr2.Cost = tr.OCRMs, tr2.Cost+tr.Cost
+	tr2.CatalogRefresh = "账户和分类有更新，已重新识别"
+	return d2, tr2, fresh
 }
 
 // settleMode says why a draft is being settled.
