@@ -144,3 +144,7 @@ docker compose up -d
 ## 数据
 
 `data/` 下有 `app.sqlite`（用户、钱迹会话、目录缓存、识别记录、记忆规则）和 `images/`（截图，默认保留 30 天）。数据库里有钱迹密码 MD5 和 Token，文件权限为 0600。
+
+## 许可证
+
+[MIT](LICENSE)
