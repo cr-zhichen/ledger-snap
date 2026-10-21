@@ -2,6 +2,14 @@
 
 iPhone 上轻点背面截图，服务端识别截图里的交易并写入钱迹。设计见 [docs/design.md](docs/design.md)，快捷指令的生成、安装和使用见 [docs/shortcut.md](docs/shortcut.md)。
 
+## 安装快捷指令
+
+在 iPhone 上用 Safari 打开下面的链接，下载后点开文件，按提示添加，并填写服务器地址和邀请码：
+
+**[下载快捷指令（ledger-snap.shortcut）](https://github.com/cr-zhichen/ledger-snap/releases/latest/download/ledger-snap.shortcut)**
+
+GitHub 的附件名不能用中文，所以添加后快捷指令叫“ledger-snap”，可以在快捷指令 App 里改名为“截图记账”。触发方式和使用方法见 [docs/shortcut.md](docs/shortcut.md)。
+
 ## 流程
 
 1. 快捷指令截屏，上传到服务端。
@@ -129,6 +137,12 @@ git tag v0.1.0
 
 ```bash
 git push origin v0.1.0
+```
+
+快捷指令要在 macOS 上签名，工作流做不了。镜像发布后，在 Mac 上把签名好的快捷指令传到这个版本的 Release（没有 Release 时会先创建），README 里的下载链接始终指向最新版本：
+
+```bash
+mise run release:shortcut v0.1.0
 ```
 
 ## HTTP 接口

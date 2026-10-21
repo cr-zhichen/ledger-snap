@@ -2,7 +2,11 @@
 
 快捷指令由程序生成，不用手动搭。它只做三件事：登录、截屏上传，然后把服务端返回的每一步显示出来。菜单、提示和分支都在服务端（[internal/server/flow.go](../internal/server/flow.go)），以后改流程不用重装快捷指令。
 
-## 生成
+## 下载
+
+签名好的快捷指令放在 [GitHub Release](https://github.com/cr-zhichen/ledger-snap/releases/latest) 里，在 iPhone 上用 Safari 打开 [这个链接](https://github.com/cr-zhichen/ledger-snap/releases/latest/download/ledger-snap.shortcut) 即可下载。GitHub 的附件名不能用中文，所以附件叫 `ledger-snap.shortcut`，添加后的快捷指令也叫“ledger-snap”，可以在快捷指令 App 里改名为“截图记账”。
+
+## 自己生成
 
 需要在 macOS 上运行，签名用系统自带的 `shortcuts sign`：
 
@@ -14,13 +18,14 @@ mise run shortcut -- --server https://snap.example.com
 
 - 导入后快捷指令的名称就是文件名，可以用 `--out` 改。
 - `--server` 和 `--invite` 是安装时两个问题的默认答案，可以不填。
-- 签名文件里可能带有签名者的 Apple 账户信息，所以 `dist/` 不提交到 Git。
+- 签名时 Apple 每次现签一张一次性证书，证书名是随机字符串，不含签名者的账户信息，所以签名文件可以公开发布。`dist/` 是构建产物，不提交到 Git。
+- 发布新版本时，用 `mise run release:shortcut <标签>` 生成、签名并上传到这个版本的 Release。
 
 ## 安装
 
-1. 把文件隔空投送到 iPhone，或者放进 iCloud 云盘，再在「文件」App 里打开。
+1. 在 iPhone 上用 Safari 下载 Release 里的快捷指令后点开；自己生成的文件可以隔空投送到 iPhone，或者放进 iCloud 云盘，再在「文件」App 里打开。
 2. 点「添加快捷指令」，填写服务器地址和邀请码。
-3. 分享给朋友：在快捷指令 App 里长按它，选择「共享 › 拷贝 iCloud 链接」。朋友安装时同样要填这两项。
+3. 分享给朋友：把上面的下载链接和邀请码发给他们，安装时同样要填这两项。不要用快捷指令 App 的「拷贝 iCloud 链接」分享自己装好的那份，里面可能带着你填过的服务器地址和邀请码。
 
 ## 第一次运行
 
@@ -31,7 +36,7 @@ mise run shortcut -- --server https://snap.example.com
 
 ## 触发
 
-打开「设置 › 辅助功能 › 触控 › 轻点背面 › 轻点两下」，选择「截图记账」。iPhone 15 Pro 及以上也可以在「设置 › 操作按钮」里绑定。
+打开「设置 › 辅助功能 › 触控 › 轻点背面 › 轻点两下」，选择这个快捷指令。iPhone 15 Pro 及以上也可以在「设置 › 操作按钮」里绑定。
 
 必须停在支付结果页时触发：「截屏」截的是当时的屏幕。在快捷指令 App 里点运行，截到的是快捷指令自己的界面。
 
@@ -72,7 +77,7 @@ mise run shortcut -- --server https://snap.example.com
 
 ## 测试情况
 
-在 macOS 27 虚拟机里用快捷指令 App 验证过以下流程，iPhone 真机还没有测：
+在 macOS 27 虚拟机里用快捷指令 App 验证过以下流程，iPhone 真机还没有测，包括从 Safari 下载后导入这一步：
 
 - 导入，以及安装时的两个问题；
 - 登录失败时的提示；

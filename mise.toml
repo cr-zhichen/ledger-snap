@@ -44,6 +44,29 @@ description = "生成并签名快捷指令到 dist/截图记账.shortcut（需�
 depends = ["build"]
 run = "./bin/ledger-snap shortcut"
 
+[tasks."release:shortcut"]
+description = "签名快捷指令并上传到某个版本的 GitHub Release，没有 Release 时先创建（需要 macOS 和 gh）"
+depends = ["build"]
+usage = 'arg "<tag>" help="版本标签，例如 v0.1.0"'
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+tag="${usage_tag?}"
+# 快捷指令只由这两处代码生成；它们在标签之后改过，就不能代表这个版本
+if ! git diff --quiet "$tag" HEAD -- internal/shortcut cmd/ledger-snap/shortcutcmd.go; then
+  echo "快捷指令的代码在 $tag 之后改过，请先切到 $tag 再上传" >&2
+  exit 1
+fi
+if ! gh release view "$tag" >/dev/null 2>&1; then
+  gh release create "$tag" --verify-tag --title "$tag" --notes "镜像：\`ghcr.io/cr-zhichen/ledger-snap:${tag#v}\`
+
+快捷指令：在 iPhone 上下载附件 \`ledger-snap.shortcut\`，打开后按提示添加，之后可以在快捷指令 App 里改名为“截图记账”。"
+fi
+# GitHub 会把非 ASCII 的附件名改成 default，所以附件用英文名，中文只放在显示标签里
+./bin/ledger-snap shortcut --out dist/ledger-snap.shortcut
+gh release upload "$tag" "dist/ledger-snap.shortcut#截图记账（iPhone 快捷指令）" --clobber
+'''
+
 [tasks."docker:up"]
 description = "用本地源码构建镜像，并按 .env 启动 Docker 服务"
 run = "docker compose -f compose.yaml -f compose.build.yaml up -d --build"
