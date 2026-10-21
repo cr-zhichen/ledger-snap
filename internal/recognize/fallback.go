@@ -16,7 +16,7 @@ var numberRe = regexp.MustCompile(`\d[\d,]*(?:\.\d+)?`)
 // FallbackResult is the vision LLM's structured reading of the screenshot.
 type FallbackResult struct {
 	IsTransaction bool   `json:"is_transaction"`
-	IsSuccess     bool   `json:"is_success"`
+	IsFailed      bool   `json:"is_failed"`
 	Kind          string `json:"kind"`
 	Amount        string `json:"amount"`
 	Time          string `json:"time"`
@@ -30,8 +30,8 @@ type FallbackResult struct {
 var fallbackSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
-		"is_transaction":  map[string]any{"type": "boolean", "description": "截图是否展示了一笔具体的交易"},
-		"is_success":      map[string]any{"type": "boolean", "description": "交易是否已经成功完成"},
+		"is_transaction":  map[string]any{"type": "boolean", "description": "截图是否展示了一笔具体的交易，已完成的和正在付款、即将付款的都算"},
+		"is_failed":       map[string]any{"type": "boolean", "description": "交易是否已经失败、取消或关闭；待支付、确认付款、处理中都不算失败"},
 		"kind":            map[string]any{"type": "string", "enum": []string{"expense", "income", "transfer", "credit", "refund", "none"}},
 		"amount":          map[string]any{"type": "string", "description": "实际付款或到账金额，两位小数，不带符号；没有则为空字符串"},
 		"time":            map[string]any{"type": "string", "description": "交易时间，格式 YYYY-MM-DD HH:MM:SS；截图里没有则为空字符串"},
@@ -41,7 +41,7 @@ var fallbackSchema = map[string]any{
 		"merchant":        map[string]any{"type": "string", "description": "交易对方，例如商户名称、收款方或付款人"},
 		"reason":          map[string]any{"type": "string", "description": "一句话说明判断依据"},
 	},
-	"required":             []string{"is_transaction", "is_success", "kind", "amount", "time", "category_id", "asset_id", "target_asset_id", "merchant", "reason"},
+	"required":             []string{"is_transaction", "is_failed", "kind", "amount", "time", "category_id", "asset_id", "target_asset_id", "merchant", "reason"},
 	"additionalProperties": false,
 }
 
@@ -67,11 +67,12 @@ func catalogText(c qianji.Catalog) string {
 	return b.String()
 }
 
-const fallbackInstructions = `你是记账助手。根据截图和 OCR 文字，判断这是不是一笔已经完成的交易，并提取记账信息。
+const fallbackInstructions = `你是记账助手。根据截图和 OCR 文字，判断这是不是一笔要记账的交易，并提取记账信息。
 规则：
+- 已经完成的交易要记，待支付、确认付款（包括 Apple Pay 等付款确认弹窗）、处理中的交易也要记；已经失败、取消或关闭的不记。
 - kind：expense 支出（付款给商户或别人，包括给别人转账、发红包）；income 收入（收到别人的转账、红包、工资、收款）；transfer 用户自己两个账户之间转钱（提现到自己的银行卡、充值、转入余额宝等，转给别人不算）；credit 用自己的账户还自己的信用卡、花呗等；refund 退款；none 不是交易。
-- 账单列表（多笔交易）、只显示余额的钱包页、商品页、待支付页、行情和新闻都不是一笔已完成的交易。
-- amount 取优惠后的实付或实际到账金额，不要取原价、优惠金额、余额或订单号。
+- 账单列表（多笔交易）、只显示余额的钱包页、商品页、行情和新闻都不是一笔具体的交易。
+- amount 取优惠后的实付或实际到账金额，还没付款时取要付的金额，不要取原价、优惠金额、余额或订单号。
 - time 取交易发生的时间，不要用顶部状态栏的时钟；只有月日时，年份按上传时间推断。
 - category_id 只能从给出的、与 kind 对应的分类里选 ID。
 - asset_id 只能从给出的账户里选 ID，而且截图里的支付方式、付款方式或收款账户要和账户名称或备注（含卡号尾号）明显对应；对应不上就留空。转账和还款时 asset_id 是转出账户，target_asset_id 是转入账户；零钱提现时转出的是零钱本身，到账的银行卡是转入账户。
@@ -114,8 +115,8 @@ func (r *Recognizer) fromFallback(f FallbackResult, in Input) *Draft {
 	if !f.IsTransaction || f.Kind == string(KindNone) {
 		return reject("截图不是交易记录")
 	}
-	if !f.IsSuccess {
-		return reject("截图里的交易还没有完成")
+	if f.IsFailed {
+		return reject("截图里的交易已经失败或取消")
 	}
 	money, err := normalizeMoney(strings.ReplaceAll(numberRe.FindString(f.Amount), ",", ""))
 	if err != nil || money == "0.00" {

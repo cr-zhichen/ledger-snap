@@ -14,7 +14,7 @@ GitHub 的附件名不能用中文，所以添加后快捷指令叫“ledger-sna
 
 1. 快捷指令截屏，上传到服务端。
 2. 服务端调 OCR（火山多语种 OCR、谷歌或百度），从文字里列出金额和时间候选。
-3. 一次决策模型请求同时判断：是否成功交易、收支类型、金额、时间、分类、账户、商户。默认经 OpenRouter 调用 Jev 1.14，也可以在 `config.toml` 里把 `decision.provider` 改成 `typesafe`，直接调用 TypeSafe 官方接口。
+3. 一次决策模型请求同时判断：是不是要记账的交易（已完成或待支付）、收支类型、金额、时间、分类、账户、商户。默认经 OpenRouter 调用 Jev 1.14，也可以在 `config.toml` 里把 `decision.provider` 改成 `typesafe`，直接调用 TypeSafe 官方接口。
 4. 判断不准时，交给视觉 LLM 兜底（默认 Claude Haiku 5.5）。
 5. 写入钱迹，返回摘要；快捷指令弹出「确认 / 修改 / 删除」，修改时可以直接选账户、收支类型、分类，改金额、时间，或用一句话改。有拿不准的字段时先不写入，等用户确认（或修改后确认）再入库。
 
@@ -75,7 +75,7 @@ mise run serve
 | `ledger-snap qianji-smoke` | 测试账号登录，并新增、修改、删除一笔 0.01 元账单 |
 | `ledger-snap seed-assets` | 在测试账号里新建一批容易混淆的账户（已存在的跳过） |
 
-测试截图在 `testdata/screens`，共 32 张：普通支付、容易混淆的账户和商户、红包和转账、自己账户之间的转账和还款、复杂界面（费用明细、电商订单、账单列表、深色模式、带广告、短信），以及与支付无关的页面。截图由 `src/` 里的网页生成，修改后运行 `testdata/screens/render.sh` 重新生成；标注在 `labels.json`。
+测试截图在 `testdata/screens`，共 33 张：普通支付、待支付、容易混淆的账户和商户、红包和转账、自己账户之间的转账和还款、复杂界面（费用明细、电商订单、账单列表、深色模式、带广告、短信）、支付失败，以及与支付无关的页面。截图由 `src/` 里的网页生成，修改后运行 `testdata/screens/render.sh` 重新生成；标注在 `labels.json`。
 
 `recognize` 和 `eval` 支持 `--provider`、`--decision-provider`、`--decision-model`、`--fallback-model`、`--no-image`、`--no-fallback`、`--force-fallback`，可以不改配置直接对比。
 

@@ -62,6 +62,8 @@ func Build(o Options) ([]byte, error) {
 	}, nil)
 
 	auth := fields("Authorization", text("Bearer ", token))
+	// Wait for the shortcut's running animation to go before the screenshot.
+	b.action("delay", dict{"WFDelayTime": 1})
 	shot := b.output("takescreenshot", "Screenshot", dict{})
 	jpeg := b.output("image.convert", "Converted Image", dict{
 		"WFInput":                   attach(shot),

@@ -6,7 +6,7 @@
     "03_wechat_receive.jpg": {"status": "ok", "kind": "income", "money": "200.00", "asset": "微信零钱", "merchant": "张三"},
     "04_bank_spend.jpg": {"status": "ok", "kind": "expense", "money": "128.00", "category": "汽车/加油", "time": "2026-10-21 08:05", "merchant": "中国石化"},
     "05_chat.jpg": {"status": "rejected"},
-    "06_pending.jpg": {"status": "rejected"},
+    "06_pending.jpg": {"status": "ok", "kind": "expense", "money": "59.90", "asset": "微信零钱", "merchant": "京东商城"},
     "07_wechat_card8888.jpg": {"status": "ok", "kind": "expense", "money": "38.00", "asset": "招行经典白", "time": "2026-10-21 11:58", "merchant": "星巴克"},
     "08_citic_didi.jpg": {"status": "ok", "kind": "expense", "money": "89.00", "category": "交通", "asset": "中信信用卡", "time": "2026-10-21 09:12", "merchant": "滴滴出行"},
     "09_icbc_rent.jpg": {"status": "ok", "kind": "expense", "money": "2350.00", "category": "住房", "asset": "工行卡", "time": "2026-10-20 10:01", "merchant": "链家"},
@@ -32,6 +32,7 @@
     "29_product_page.jpg": {"status": "rejected"},
     "30_weather.jpg": {"status": "rejected"},
     "31_wallet_balance.jpg": {"status": "rejected"},
-    "32_sms_cmb.jpg": {"status": "ok", "kind": "expense", "money": "35.00", "asset": "招商银行储蓄卡(5678)", "time": "2026-10-21 07:58", "merchant": "全家"}
+    "32_sms_cmb.jpg": {"status": "ok", "kind": "expense", "money": "35.00", "asset": "招商银行储蓄卡(5678)", "time": "2026-10-21 07:58", "merchant": "全家"},
+    "33_pay_failed.jpg": {"status": "rejected"}
   }
 }

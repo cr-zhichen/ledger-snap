@@ -183,7 +183,7 @@ func (r *Recognizer) Recognize(ctx context.Context, in Input) (*Draft, *Trace, e
 
 func reject(reason string) *Draft { return &Draft{Status: "rejected", Reason: reason, Kind: KindNone} }
 
-const intro = "这是用户在手机上截取的一张屏幕截图，可能是支付成功页、账单详情、收款或转账页面，也可能与交易无关。"
+const intro = "这是用户在手机上截取的一张屏幕截图，可能是支付成功页、待支付或确认付款页、账单详情、收款或转账页面，也可能与交易无关。"
 
 func (r *Recognizer) state(rows []Row, in Input, image []byte) []any {
 	state := []any{intro}
@@ -212,10 +212,12 @@ type questionSet struct {
 
 func (r *Recognizer) buildQuestions(rows []Row, trace *Trace, in Input) questionSet {
 	qs := questionSet{questions: map[string]openrouter.Question{}, categories: map[string]string{}, assets: map[string]string{}, merchants: map[string]string{}}
-	qs.questions["success"] = openrouter.NoulQuestion(
-		"截图显示的是一笔已经成功完成的交易（支付成功、交易成功、已收款、转账成功、提现成功、还款成功、退款成功、扣款成功等）。",
-		"页面明确显示交易已经成功完成。",
-		"页面与交易无关，或交易尚未完成（待支付、确认付款、支付失败、已取消、处理中、待对方收款），或者是列出多笔交易的账单列表、只显示余额的钱包页、商品页、行情或新闻。")
+	// Payments not finished yet still count: users often trigger the shortcut
+	// on the confirm sheet, before the success page.
+	qs.questions["transaction"] = openrouter.NoulQuestion(
+		"截图显示的是一笔要记账的具体交易：已经完成，或者正在付款、即将付款。",
+		"页面显示了一笔具体交易，包括支付成功、交易成功、已收款、转账成功、提现成功、还款成功、退款成功、扣款成功，也包括待支付、确认付款、Apple Pay 等付款确认弹窗、收银台、处理中、待对方收款。",
+		"页面与交易无关，或交易已经失败、取消、关闭，或者是列出多笔交易的账单列表、只显示余额的钱包页、商品页、行情或新闻。")
 	qs.questions["kind"] = openrouter.ChoiceQuestion("对用户来说，这笔交易属于哪一类？", []openrouter.Option{
 		{Key: string(KindExpense), Description: "支出：用户把钱付给商户或其他人，包括购物、消费、给别人转账、发红包、AA 付款"},
 		{Key: string(KindIncome), Description: "收入：用户从别人那里收到钱，包括收到别人的转账、收红包、工资、收款"},
@@ -234,7 +236,7 @@ func (r *Recognizer) buildQuestions(rows []Row, trace *Trace, in Input) question
 		}
 		amounts = append(amounts, openrouter.Option{Key: a.Key, Description: fmt.Sprintf("%s%s（所在行：%s）", sign, a.Value, a.Context)})
 	}
-	qs.questions["amount"] = openrouter.ChoiceQuestion("这笔交易实际付款或到账的金额是哪一个？有优惠时选优惠后的实付金额，不要选原价、优惠金额、余额或订单号。", amounts)
+	qs.questions["amount"] = openrouter.ChoiceQuestion("这笔交易实际付款或到账的金额是哪一个？还没付款时选要付的金额；有优惠时选优惠后的实付金额，不要选原价、优惠金额、余额或订单号。", amounts)
 	times := []openrouter.Option{{Key: "none", Description: "截图里没有这笔交易的发生时间（顶部状态栏的时钟不算）"}}
 	for _, t := range trace.Times {
 		times = append(times, openrouter.Option{Key: t.Key, Description: fmt.Sprintf("%s（所在行：%s）", t.Text, t.Context)})
@@ -305,13 +307,13 @@ func limit[T any](items []T, n int) []T {
 // were not trustworthy enough and the fallback should run.
 func (r *Recognizer) interpret(ans map[string]openrouter.Answer, qs questionSet, trace *Trace, in Input) (*Draft, string) {
 	th := r.Config.Decision.Thresholds
-	success := ans["success"].Noul
+	transaction := ans["transaction"].Noul
 	kind := ans["kind"]
 	switch {
-	case success < 0.25 && kind.Prob() >= th.Type:
-		return reject("截图不是一笔已完成的交易"), ""
-	case success < th.Transaction:
-		return nil, fmt.Sprintf("不确定交易是否成功（%.2f）", success)
+	case transaction < 0.25 && kind.Prob() >= th.Type:
+		return reject("截图里没有要记账的交易"), ""
+	case transaction < th.Transaction:
+		return nil, fmt.Sprintf("不确定是不是要记账的交易（%.2f）", transaction)
 	case kind.Prob() < th.Type:
 		return nil, fmt.Sprintf("交易类型不确定（%s %.2f）", kind.Choice, kind.Prob())
 	}
@@ -319,15 +321,11 @@ func (r *Recognizer) interpret(ans map[string]openrouter.Answer, qs questionSet,
 	if d.Kind == KindNone {
 		return reject("截图不是交易记录"), ""
 	}
-	amount := ans["amount"]
-	if amount.Choice == "none" || amount.Prob() < th.Amount {
-		return nil, fmt.Sprintf("金额不确定（%s %.2f）", amount.Choice, amount.Prob())
+	money, p := pickAmount(trace.Amounts, ans["amount"])
+	if money == "" || p < th.Amount {
+		return nil, fmt.Sprintf("金额不确定（%s %.2f）", ans["amount"].Choice, p)
 	}
-	for _, a := range trace.Amounts {
-		if a.Key == amount.Choice {
-			d.Money = a.Value
-		}
-	}
+	d.Money = money
 	if t := ans["time"]; t.Choice != "none" {
 		for _, c := range trace.Times {
 			if c.Key == t.Choice {
@@ -374,9 +372,26 @@ func (r *Recognizer) interpret(ans map[string]openrouter.Answer, qs questionSet,
 	return d, ""
 }
 
+// pickAmount returns the most likely amount value. The same amount often
+// shows on several rows (the big number, the total, the paid line), and the
+// model splits its probability among them, so rows with one value add up.
+func pickAmount(cands []AmountCandidate, ans openrouter.Answer) (string, float64) {
+	sums := map[string]float64{}
+	for _, c := range cands {
+		sums[c.Value] += ans.Probabilities[c.Key]
+	}
+	money, p := "", 0.0
+	for _, c := range cands {
+		if sums[c.Value] > p {
+			money, p = c.Value, sums[c.Value]
+		}
+	}
+	return money, p
+}
+
 // merchantName strips a leading field label such as "交易商户 ".
 func merchantName(row string) string {
-	for _, label := range []string{"交易商户", "收款方", "商户名称", "商户", "对方账户", "转账说明", "商品说明", "交易对方"} {
+	for _, label := range []string{"交易商户", "收款方", "商户名称", "商户", "对方账户", "转账说明", "商品说明", "交易对方", "付给"} {
 		if rest, ok := strings.CutPrefix(row, label); ok {
 			return strings.TrimSpace(strings.TrimLeft(rest, ":："))
 		}
