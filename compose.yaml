@@ -16,8 +16,8 @@ services:
     volumes:
       # 数据库和截图都在 ./data 里，备份时直接复制这个目录
       - ./data:/app/data
-      # 镜像自带同版本的 config.toml。要改配置时，下载同一版本的 config.toml 放在旁边，
-      # 取消下一行的注释；之后改完配置运行 docker compose restart ledger-snap 即可生效
+      # 镜像自带同版本的 config.toml，单项配置用 .env 里的 LEDGER_SNAP_ 变量覆盖即可。
+      # 要整体换掉时，下载同一版本的 config.toml 放在旁边，取消下一行的注释
       # - ./config.toml:/app/config.toml:ro
     ports:
       - "${LEDGER_SNAP_PORT:-8080}:8080"

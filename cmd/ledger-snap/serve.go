@@ -85,6 +85,9 @@ func runServe(ctx context.Context, args []string) error {
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
 	}()
+	if len(cfg.EnvOverrides) > 0 {
+		log.Info("环境变量覆盖了配置", "keys", strings.Join(cfg.EnvOverrides, ","))
+	}
 	log.Info("服务已启动", "version", version, "listen", cfg.Server.Listen, "ocr", cfg.OCR.Provider, "decision", cfg.Decision.Model, "fallback", cfg.Fallback.Model)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err

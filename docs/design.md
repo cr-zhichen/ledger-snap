@@ -302,7 +302,7 @@ data/
 | 谷歌 Cloud Vision（`DOCUMENT_TEXT_DETECTION`） | 文字识别，备选 | 按符号的换行标记拼出文字行 |
 | 百度 OCR（高精度含位置版） | 文字识别，备选 | 会返回全角冒号等字符，识别前统一转成半角 |
 
-配置统一用环境变量：`OPENROUTER_API_KEY`、`VOLC_ACCESS_KEY`、`VOLC_SECRET_KEY`、`DECISION_MODEL`、`FALLBACK_MODEL`、`INVITE_CODES`、`DATA_DIR`，以及可选的 `DATA_KEY`（用于加密凭据列）。
+配置在 `config.toml` 里，镜像自带一份。每一项都可以用环境变量覆盖，变量名是 `LEDGER_SNAP_` 加上配置项路径的大写（点换成下划线），所以部署时只需要一个 `.env`；拼错的变量名会让服务拒绝启动。密钥不进配置文件，配置里写的是存放密钥的环境变量名，例如 `OPENROUTER_API_KEY`、`VOLCANO_OCR_ACCESS_KEY`。
 
 **部署地区**：OpenRouter 上的 OpenAI、Anthropic 模型拒绝来自中国大陆和香港的请求，所以服务器要放在日本、新加坡或美国。火山 OCR 在国内，钱迹的接口大概率也在国内，海外服务器调用它们会多几十到一百多毫秒。容器只提供 HTTP，HTTPS 由外部的反向代理负责。
 

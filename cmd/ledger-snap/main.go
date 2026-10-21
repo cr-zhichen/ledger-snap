@@ -21,6 +21,7 @@ var commands = map[string]struct {
 	"ocr":          {runOCR, "用一个或多个 OCR 服务识别图片并打印文字行"},
 	"recognize":    {runRecognize, "用测试账号的目录识别截图，只打印结果，不写入钱迹"},
 	"serve":        {runServe, "启动给快捷指令调用的 HTTP 服务"},
+	"config":       {runConfig, "列出全部配置项、覆盖它的环境变量和当前值"},
 	"eval":         {runEval, "按 labels.json 评测识别准确率、耗时和费用，不写入钱迹"},
 	"seed-assets":  {runSeedAssets, "在测试账号里新建一批容易混淆的账户（已存在的跳过）"},
 	"healthcheck":  {runHealthcheck, "检查服务的 /healthz，给容器健康检查用"},

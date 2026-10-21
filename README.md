@@ -37,6 +37,22 @@ GitHub 的附件名不能用中文，所以添加后快捷指令叫“ledger-sna
 
 本机的密钥由 Harmonia 管理，命令通过 `harmonia exec --` 运行。
 
+`config.toml` 里的每一项都可以用环境变量覆盖，优先于文件。变量名是 `LEDGER_SNAP_` 加上配置项路径的大写，点换成下划线，例如：
+
+| 配置项 | 环境变量 |
+| --- | --- |
+| `ocr.provider` | `LEDGER_SNAP_OCR_PROVIDER` |
+| `decision.model` | `LEDGER_SNAP_DECISION_MODEL` |
+| `decision.thresholds.category` | `LEDGER_SNAP_DECISION_THRESHOLDS_CATEGORY` |
+| `fallback.enabled` | `LEDGER_SNAP_FALLBACK_ENABLED` |
+
+- 时长写成 `10m`、`6h` 这样；列表用逗号分隔；布尔值写 `true` 或 `false`。
+- 值为空的变量当作没设置。
+- 拼错的 `LEDGER_SNAP_` 变量会让服务拒绝启动，和配置文件里的未知字段一样，免得改了却没生效。
+- 启动日志会列出被环境变量覆盖的配置项。
+
+`ledger-snap config` 列出全部配置项、对应的环境变量和当前值；在容器里运行 `docker compose exec ledger-snap /app/ledger-snap config`。
+
 ## 命令
 
 ```bash
@@ -50,6 +66,7 @@ mise run serve
 | 命令 | 作用 |
 | --- | --- |
 | `ledger-snap serve` | 启动 HTTP 服务 |
+| `ledger-snap config` | 列出全部配置项、覆盖它的环境变量和当前值 |
 | `ledger-snap ocr --provider volcano,google,baidu <图片>` | 对比 OCR 结果 |
 | `ledger-snap recognize <图片>...` | 用测试账号的分类和资产识别截图，不写入钱迹 |
 | `ledger-snap eval` | 按 `testdata/screens/labels.json` 评测准确率、耗时和费用 |
@@ -110,7 +127,7 @@ docker compose pull
 docker compose up -d
 ```
 
-**改配置**：下载与镜像同一版本的 `config.toml`（例如 `https://raw.githubusercontent.com/cr-zhichen/ledger-snap/v0.1.0/config.toml`）放在 `compose.yaml` 旁边，取消 `compose.yaml` 里挂载它的那行注释。之后改完配置运行 `docker compose restart ledger-snap` 即可，不用重建。配置和镜像要用同一个版本：程序遇到不认识的配置项会拒绝启动，以免拼错的配置被悄悄忽略。
+**改配置**：在 `.env` 里加对应的 `LEDGER_SNAP_` 变量（见上面的“配置”一节，`.env.example` 里列了常用的几项），然后 `docker compose up -d` 重建容器即可生效（只 `restart` 不会重新读取 `.env`）。要改的项很多时，也可以下载与镜像同一版本的 `config.toml`（例如 `https://raw.githubusercontent.com/cr-zhichen/ledger-snap/v0.1.0/config.toml`）放在 `compose.yaml` 旁边，取消 `compose.yaml` 里挂载它的那行注释；配置和镜像要用同一个版本，程序遇到不认识的配置项会拒绝启动。
 
 **反向代理**：容器只提供 HTTP，HTTPS 由外部的反向代理负责。反向代理和容器在同一台机器上时，建议把 `LEDGER_SNAP_PORT` 设为 `127.0.0.1:8080`，服务端口只对本机开放。上传截图的请求体可能超过 1 MB，反向代理的请求体上限要放宽到 10 MB 左右（Nginx 默认只有 1 MB，对应 `client_max_body_size`）。
 

@@ -1,5 +1,6 @@
-// Package config loads config.toml. Secrets never live in the file: each
-// secret field names the environment variable that holds it.
+// Package config loads config.toml, which environment variables can override
+// key by key (see EnvPrefix). Secrets never live in the file: each secret
+// field names the environment variable that holds it.
 package config
 
 import (
@@ -32,6 +33,9 @@ type Config struct {
 	Fallback   Fallback   `toml:"fallback"`
 	Correction Correction `toml:"correction"`
 	Recognize  Recognize  `toml:"recognize"`
+
+	// EnvOverrides lists the keys set from environment variables.
+	EnvOverrides []string `toml:"-"`
 }
 
 type Server struct {
@@ -155,6 +159,9 @@ func Load(path string) (*Config, error) {
 	}
 	if keys := meta.Undecoded(); len(keys) > 0 {
 		return nil, fmt.Errorf("配置 %s 有未知字段: %v", path, keys)
+	}
+	if err := c.applyEnv(); err != nil {
+		return nil, err
 	}
 	if c.Decision.Provider != "openrouter" && c.Decision.Provider != "typesafe" {
 		return nil, fmt.Errorf("decision.provider 只能是 openrouter 或 typesafe")
