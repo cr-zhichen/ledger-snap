@@ -63,31 +63,52 @@ QIANJI_TEST_PASSWORD_MD5=...
 
 ## Docker 部署
 
-镜像是两阶段构建：用 `golang:1.27.2-alpine` 编译静态二进制，运行在 `distroless/static` 上，约 25 MB。数据直接映射到项目下的 `./data`（数据库 `app.sqlite` 和截图都在里面）。`config.toml` 以只读方式挂载，改完配置运行 `docker compose restart ledger-snap` 即可生效，不用重新构建。
+镜像发布在 `ghcr.io/cr-zhichen/ledger-snap`，支持 amd64 和 arm64，可以直接拉取，不用登录。镜像里自带同版本的 `config.toml`，所以服务器上只需要 [compose.yaml](compose.yaml) 和 `.env`，数据直接映射到 `./data`（数据库 `app.sqlite` 和截图都在里面）。
 
-compose 直接读取同目录的 `.env`（没有 `.env` 时会报错），把里面的变量全部传给服务：
+在服务器上建一个目录，下载这两个文件：
 
 ```bash
-cp .env.example .env
+curl -fsSLO https://raw.githubusercontent.com/cr-zhichen/ledger-snap/main/compose.yaml
 ```
 
-在 `.env` 里填好密钥和邀请码，并把 `LEDGER_SNAP_UID`、`LEDGER_SNAP_GID` 改成当前用户的 `id -u`、`id -g`：容器以这个身份运行，才能写入 `./data`。然后先建好数据目录再启动：
+```bash
+curl -fsSL -o .env https://raw.githubusercontent.com/cr-zhichen/ledger-snap/main/.env.example
+```
+
+在 `.env` 里填好密钥和邀请码，再改两处：
+
+- `LEDGER_SNAP_UID`、`LEDGER_SNAP_GID` 改成当前用户的 `id -u`、`id -g`：容器以这个身份运行，才能写入 `./data`；
+- `LEDGER_SNAP_IMAGE` 建议固定版本，例如 `ghcr.io/cr-zhichen/ledger-snap:0.1.0`，留空则用 `latest`。
+
+然后先建好数据目录再启动：
 
 ```bash
 mkdir -p data
 ```
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
 如果不先建 `data`，Docker 会以 root 身份创建它，容器就写不进去，启动时会报无法创建数据库。
 
-容器只提供 HTTP，HTTPS 由外部的反向代理负责。反向代理和容器在同一台机器上时，建议把 `LEDGER_SNAP_PORT` 设为 `127.0.0.1:8080`，服务端口只对本机开放。上传截图的请求体可能超过 1 MB，反向代理的请求体上限要放宽到 10 MB 左右（Nginx 默认只有 1 MB，对应 `client_max_body_size`）。
+**升级**：改 `.env` 里的 `LEDGER_SNAP_IMAGE`，然后：
 
-`config.toml` 和镜像要用同一个版本：程序遇到不认识的配置项会拒绝启动，以免拼错的配置被悄悄忽略。
+```bash
+docker compose pull
+```
 
-备份时停掉服务，直接复制 `./data` 目录即可。
+```bash
+docker compose up -d
+```
+
+**改配置**：下载与镜像同一版本的 `config.toml`（例如 `https://raw.githubusercontent.com/cr-zhichen/ledger-snap/v0.1.0/config.toml`）放在 `compose.yaml` 旁边，取消 `compose.yaml` 里挂载它的那行注释。之后改完配置运行 `docker compose restart ledger-snap` 即可，不用重建。配置和镜像要用同一个版本：程序遇到不认识的配置项会拒绝启动，以免拼错的配置被悄悄忽略。
+
+**反向代理**：容器只提供 HTTP，HTTPS 由外部的反向代理负责。反向代理和容器在同一台机器上时，建议把 `LEDGER_SNAP_PORT` 设为 `127.0.0.1:8080`，服务端口只对本机开放。上传截图的请求体可能超过 1 MB，反向代理的请求体上限要放宽到 10 MB 左右（Nginx 默认只有 1 MB，对应 `client_max_body_size`）。
+
+**备份**：停掉服务，直接复制 `./data` 目录即可。
+
+**用本地源码构建**：在项目目录里运行 `mise run docker:up`。它叠加 [compose.build.yaml](compose.build.yaml)，用当前源码构建出 `ledger-snap:dev` 镜像，并挂载本地的 `config.toml`。
 
 ## 发布镜像
 
@@ -109,20 +130,6 @@ git tag v0.1.0
 ```bash
 git push origin v0.1.0
 ```
-
-GHCR 上的包第一次发布时默认是私有的。服务器要拉取它，有两种办法：在 GitHub 的 Packages 设置里把它改为公开；或者在服务器上用带 `read:packages` 权限的令牌执行 `docker login ghcr.io`。
-
-服务器上使用发布好的镜像时，在 `.env` 里设置 `LEDGER_SNAP_IMAGE=ghcr.io/cr-zhichen/ledger-snap:0.1.0`（或 `latest`），然后：
-
-```bash
-docker compose pull
-```
-
-```bash
-docker compose up -d
-```
-
-这时不要加 `--build`，否则会改用本地源码构建。服务器上只需要 `compose.yaml`、`config.toml`、`.env` 和 `data` 目录。
 
 ## HTTP 接口
 

@@ -45,5 +45,5 @@ depends = ["build"]
 run = "./bin/ledger-snap shortcut"
 
 [tasks."docker:up"]
-description = "按 .env 构建并启动 Docker 服务"
-run = "docker compose up -d --build"
+description = "用本地源码构建镜像，并按 .env 启动 Docker 服务"
+run = "docker compose -f compose.yaml -f compose.build.yaml up -d --build"

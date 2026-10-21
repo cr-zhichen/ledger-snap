@@ -1,0 +1,10 @@
+# 用本地源码构建镜像，代替发布的镜像，并挂载本地的 config.toml：
+# docker compose -f compose.yaml -f compose.build.yaml up -d --build（即 mise run docker:up）
+
+services:
+  ledger-snap:
+    build: .
+    # 另起一个本地标签，免得覆盖拉取下来的发布镜像
+    image: ledger-snap:dev
+    volumes:
+      - ./config.toml:/app/config.toml:ro

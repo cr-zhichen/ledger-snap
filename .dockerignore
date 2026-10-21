@@ -6,6 +6,6 @@ data
 testdata
 eval-out
 docs
-compose.yaml
+compose*.yaml
 Dockerfile
 .github
