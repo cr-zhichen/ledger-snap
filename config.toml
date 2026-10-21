@@ -1,0 +1,116 @@
+# ledger-snap 配置。密钥不写在这里：*_env 字段填的是存放密钥的环境变量名。
+
+[server]
+listen = ":8080"
+data_dir = "data"
+# 环境变量里写逗号分隔的邀请码，例如 "abc123,def456"
+invite_codes_env = "LEDGER_SNAP_INVITE_CODES"
+max_upload_mb = 10
+image_retention_days = 30
+
+[qianji]
+base_url = "https://api.qianjiapp.com"
+timeout = "20s"
+# 签名用到 version_code，必须和 version_name 对应；改动前先跑 qianji-smoke
+version_code = 1207
+version_name = "4.5.1b3"
+market = "beta"
+os_version = "36"
+device_brand = "LedgerSnap"
+device_name = "LedgerSnap"
+# 分类、资产目录超过这个时长就重新拉取
+catalog_ttl = "6h"
+
+[ocr]
+# volcano | google | baidu
+provider = "volcano"
+timeout = "15s"
+
+[ocr.volcano]
+endpoint = "https://visual.volcengineapi.com"
+# 多语种 OCR；改用通用文字识别时填 OCRNormal / 2020-08-26
+action = "MultiLanguageOCR"
+version = "2022-08-31"
+# 多语种 OCR 要求图片每边不超过 2048 像素，超出时先缩小
+max_side = 2048
+region = "cn-north-1"
+service = "cv"
+access_key_env = "VOLCANO_OCR_ACCESS_KEY"
+secret_key_env = "VOLCANO_OCR_SECRET_KEY"
+# 置信度低于这个分数的文本行会被过滤，0~100
+filter_thresh = "60"
+
+[ocr.google]
+endpoint = "https://vision.googleapis.com/v1/images:annotate"
+api_key_env = "GOOGLE_OCR_API_KEY"
+# TEXT_DETECTION | DOCUMENT_TEXT_DETECTION
+feature = "DOCUMENT_TEXT_DETECTION"
+language_hints = ["zh", "en"]
+
+[ocr.baidu]
+token_url = "https://aip.baidubce.com/oauth/2.0/token"
+# accurate 为高精度含位置版，general 为标准含位置版
+endpoint = "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate"
+api_key_env = "BAIDU_OCR_API_KEY"
+secret_key_env = "BAIDU_OCR_SECRET_KEY"
+
+[openrouter]
+base_url = "https://openrouter.ai"
+api_key_env = "OPENROUTER_API_KEY"
+timeout = "45s"
+app_name = "ledger-snap"
+
+[decision]
+# openrouter：经 OpenRouter 决策接口调用，模型例如 typesafe/jev-1.14、openai/gpt-6-luna-decisions
+# typesafe：直接调用 TypeSafe 官方接口（见 [typesafe]），模型为 jev-latest 或 jev-preview
+provider = "openrouter"
+model = "typesafe/jev-1.14"
+send_image = true
+# Jev 要求图片每边不超过 1568 像素；TypeSafe 官方接口要求至少 280 像素（OpenRouter 为 256）
+image_max_side = 1568
+image_min_side = 280
+jpeg_quality = 85
+# 金额、时间、文字行候选各自的数量上限，最大 254（Jev 每个问题最多 255 个选项，要留一个“没有”）。
+# 超出时金额按字号从大到小保留，时间和文字行按从上到下保留，截断情况记在识别记录的 truncated 里。
+# 分类和账户固定最多 254 个，超出同样截断并记录。
+max_candidates = 100
+
+# 交易、类型、金额低于阈值时交给视觉 LLM 兜底；时间、分类、账户低于阈值时标为拿不准
+[decision.thresholds]
+transaction = 0.6
+type = 0.6
+amount = 0.6
+time = 0.5
+category = 0.4
+asset = 0.4
+
+[typesafe]
+base_url = "https://api.typesafe.ai"
+api_key_env = "TYPESAFE_AI_API_KEY"
+timeout = "30s"
+# 官方接口只返回 token 数，按这个单价（美元/百万输入 token）估算费用
+input_price_per_mtok = 0.042
+
+[fallback]
+enabled = true
+# 2026-10-21 用 6 张合成截图对比：Haiku 5.5 全对且便宜；Gemini 3.8 Flash 全对但贵 3 倍、偶尔很慢；
+# DeepSeek V4.1 Flash 1017 最快，但把待支付页记成了支出
+model = "anthropic/claude-haiku-5.5"
+# none | minimal | low | medium | high
+reasoning_effort = "low"
+max_tokens = 4000
+image_max_side = 1568
+
+[correction]
+model = "anthropic/claude-haiku-5.5"
+reasoning_effort = "low"
+max_tokens = 2000
+
+[recognize]
+timezone = "Asia/Shanghai"
+# 这个时间窗口内同金额、同资产的账单视为疑似重复
+dedup_window = "5m"
+# 截图时间比手机时间早这么多，就把时间标为拿不准
+stale_screenshot = "24h"
+# 有拿不准的字段时先不记账，返回 needs_confirm 让用户确认或修改，确认后再写入
+confirm_uncertain = true

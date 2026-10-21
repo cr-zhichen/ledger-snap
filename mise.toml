@@ -1,0 +1,44 @@
+[tools]
+go = "1.27.2"
+actionlint = "1.7.12"
+
+[tasks.build]
+description = "构建 bin/ledger-snap"
+run = "go build -o bin/ledger-snap ./cmd/ledger-snap"
+
+[tasks.test]
+description = "运行单元测试"
+run = "go test ./..."
+
+[tasks."workflows:lint"]
+description = "校验 GitHub Actions 工作流"
+run = "actionlint"
+
+[tasks.check]
+description = "格式检查、静态检查、工作流校验、测试与构建"
+depends = ["workflows:lint"]
+run = [
+  "test -z \"$(gofmt -l cmd internal)\" || (gofmt -l cmd internal; exit 1)",
+  "go vet ./...",
+  "go test ./...",
+  "go build -o bin/ledger-snap ./cmd/ledger-snap",
+]
+
+[tasks.serve]
+description = "用 Harmonia 里的密钥在本机启动服务"
+depends = ["build"]
+run = "harmonia exec -- ./bin/ledger-snap serve"
+
+[tasks.smoke]
+description = "用 .env.local 里的测试账号跑钱迹冒烟测试（会新增并删除一笔 0.01 元账单）"
+depends = ["build"]
+run = "set -a && . ./.env.local && set +a && ./bin/ledger-snap qianji-smoke"
+
+[tasks.eval]
+description = "按 testdata/screens/labels.json 评测识别效果；参数放在 -- 之后，例如 --provider baidu"
+depends = ["build"]
+run = "set -a && . ./.env.local && set +a && harmonia exec -- ./bin/ledger-snap eval"
+
+[tasks."docker:up"]
+description = "按 .env 构建并启动 Docker 服务"
+run = "docker compose up -d --build"

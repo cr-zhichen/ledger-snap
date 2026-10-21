@@ -1,0 +1,23 @@
+# 先复制 .env.example 为 .env 并填写，再 mkdir -p data，然后：docker compose up -d --build
+# 容器只提供 HTTP；HTTPS 由外部的反向代理负责。
+
+services:
+  ledger-snap:
+    build: .
+    # 默认本地构建；用 GitHub 发布的镜像时在 .env 里设置 LEDGER_SNAP_IMAGE，
+    # 然后 docker compose pull && docker compose up -d（不要加 --build）
+    image: ${LEDGER_SNAP_IMAGE:-ledger-snap:latest}
+    restart: unless-stopped
+    # 以宿主机用户的身份运行，才能写入映射进来的 ./data；在 .env 里填 id -u 和 id -g 的结果
+    user: "${LEDGER_SNAP_UID:-65532}:${LEDGER_SNAP_GID:-65532}"
+    # 密钥、邀请码都从 .env 读取
+    env_file:
+      - path: .env
+        required: true
+    volumes:
+      # 数据库和截图都在 ./data 里，备份时直接复制这个目录
+      - ./data:/app/data
+      # 改配置不用重建镜像：挂载本地的 config.toml，改完 docker compose restart ledger-snap
+      - ./config.toml:/app/config.toml:ro
+    ports:
+      - "${LEDGER_SNAP_PORT:-8080}:8080"

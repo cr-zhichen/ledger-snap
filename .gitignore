@@ -1,0 +1,8 @@
+/bin/
+/data/
+*.local.*
+.env*
+/testdata/private/
+/eval-out/
+!.env.example
+.DS_Store

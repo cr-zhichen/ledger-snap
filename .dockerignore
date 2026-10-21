@@ -1,0 +1,11 @@
+.git
+.env*
+*.local.*
+bin
+data
+testdata
+eval-out
+docs
+compose.yaml
+Dockerfile
+.github
