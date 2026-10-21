@@ -3,6 +3,7 @@ package recognize
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -173,10 +174,18 @@ type TimeCandidate struct {
 	Context string    `json:"context"`
 }
 
+// English month names, full or abbreviated: "Oct", "Sept.", "October".
+const monthName = `(?i:(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?))\b\.?`
+
+// clockSuffix is an optional time after an English date: ", 14:05", " at 3:07 PM".
+const clockSuffix = `(?:,?\s+(?:at\s+)?(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([AaPp][Mm])\b)?)?`
+
 var timePatterns = []struct {
 	re                     *regexp.Regexp
 	year, month, day, h, m int // submatch indexes, 0 = absent
 	sec                    int
+	monthName              int // submatch with an English month name
+	ampm                   int // submatch with AM or PM
 	relative               int // submatch with 今天/昨天
 }{
 	{re: regexp.MustCompile(`(20\d{2})\s*[` + dashes + `/.年]\s*(\d{1,2})\s*[` + dashes + `/.月]\s*(\d{1,2})\s*日?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?`), year: 1, month: 2, day: 3, h: 4, m: 5, sec: 6},
@@ -184,11 +193,19 @@ var timePatterns = []struct {
 	{re: regexp.MustCompile(`(?:^|[^\d])(\d{1,2})[` + dashes + `/](\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?`), month: 1, day: 2, h: 3, m: 4, sec: 5},
 	{re: regexp.MustCompile(`(今天|昨天)\s*(\d{1,2}):(\d{2})`), relative: 1, h: 2, m: 3},
 	{re: regexp.MustCompile(`(20\d{2})\s*[` + dashes + `/.年]\s*(\d{1,2})\s*[` + dashes + `/.月]\s*(\d{1,2})\s*日?`), year: 1, month: 2, day: 3},
+	// "13 Oct", "13-Oct-2026", "13 October 2026 14:05"
+	{re: regexp.MustCompile(`\b(\d{1,2})(?:st|nd|rd|th)?[\s` + dashes + `/]+` + monthName + `(?:[\s` + dashes + `/,]+(20\d{2}))?` + clockSuffix), day: 1, monthName: 2, year: 3, h: 4, m: 5, sec: 6, ampm: 7},
+	// "Oct 13", "Oct 13, 2026 at 3:07 PM"
+	{re: regexp.MustCompile(monthName + `\s+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s+(20\d{2}))?` + clockSuffix), monthName: 1, day: 2, year: 3, h: 4, m: 5, sec: 6, ampm: 7},
+	{re: regexp.MustCompile(`(\d{1,2})月(\d{1,2})日`), month: 1, day: 2},
 }
+
+var monthAbbr = []string{"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"}
 
 // Times lists date-times shown in the screenshot, resolved in loc. Dates
 // without a year take the upload year, or the previous year if that would put
-// them in the future.
+// them in the future. A date without a clock time takes the upload time on the
+// upload day and noon on other days.
 func Times(rows []Row, now time.Time, loc *time.Location, limit int) []TimeCandidate {
 	now = now.In(loc)
 	var out []TimeCandidate
@@ -208,8 +225,12 @@ func Times(rows []Row, now time.Time, loc *time.Location, limit int) []TimeCandi
 					v, _ := strconv.Atoi(row.Text[m[2*i]:m[2*i+1]])
 					return v
 				}
-				c := TimeCandidate{Text: strings.TrimSpace(row.Text[m[0]:m[1]]), Context: row.Text, HasYear: p.year > 0 || p.relative > 0, HasTime: p.h > 0}
+				present := func(i int) bool { return i > 0 && m[2*i] >= 0 }
+				c := TimeCandidate{Text: strings.TrimSpace(row.Text[m[0]:m[1]]), Context: row.Text, HasYear: present(p.year) || p.relative > 0, HasTime: present(p.h)}
 				year, month, day := num(p.year), num(p.month), num(p.day)
+				if p.monthName > 0 {
+					month = slices.Index(monthAbbr, strings.ToLower(part(row.Text, m, p.monthName))[:3]) + 1
+				}
 				if p.relative > 0 {
 					d := now
 					if part(row.Text, m, p.relative) == "昨天" {
@@ -220,7 +241,7 @@ func Times(rows []Row, now time.Time, loc *time.Location, limit int) []TimeCandi
 				if year == 0 {
 					year = now.Year()
 				}
-				hour, minute, second := num(p.h), num(p.m), num(p.sec)
+				hour, minute, second := clock24(num(p.h), part(row.Text, m, p.ampm)), num(p.m), num(p.sec)
 				if !c.HasTime {
 					hour = 12
 				}
@@ -230,6 +251,9 @@ func Times(rows []Row, now time.Time, loc *time.Location, limit int) []TimeCandi
 				}
 				if !c.HasYear && t.After(now.Add(24*time.Hour)) {
 					t = t.AddDate(-1, 0, 0)
+				}
+				if !c.HasTime && t.Year() == now.Year() && t.YearDay() == now.YearDay() {
+					t = time.Date(t.Year(), t.Month(), t.Day(), now.Hour(), now.Minute(), 0, 0, loc)
 				}
 				if seen[t.Unix()] {
 					continue
@@ -247,6 +271,21 @@ func Times(rows []Row, now time.Time, loc *time.Location, limit int) []TimeCandi
 		out[i].Key = fmt.Sprintf("t%d", i)
 	}
 	return out
+}
+
+// clock24 converts a 12-hour clock hour marked AM or PM; other hours pass through.
+func clock24(hour int, ampm string) int {
+	switch strings.ToLower(ampm) {
+	case "pm":
+		if hour < 12 {
+			return hour + 12
+		}
+	case "am":
+		if hour == 12 {
+			return 0
+		}
+	}
+	return hour
 }
 
 // statusBar reports whether a row sits in the top strip of the screen.

@@ -95,3 +95,33 @@ func TestTimes(t *testing.T) {
 		}
 	}
 }
+
+func TestTimesEnglishAndDateOnly(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	now := time.Date(2026, 10, 21, 18, 18, 0, 0, loc)
+	rows := Rows([]ocr.Line{
+		line("Date", 0, 100, 40), line("13 Oct", 400, 100, 40),
+		line("Transaction time 12 October 2026 14:05", 0, 200, 40),
+		line("Posted Oct 11, 2026 at 3:07 PM", 0, 300, 40),
+		line("Value date: 21-Oct-2026", 0, 400, 40),
+		line("Dec 31", 0, 500, 40),
+		line("交易日期 10月18日", 0, 600, 40),
+		// Not dates: a month-like word without a day, and a word that only starts like a month.
+		line("You may check further details", 0, 700, 40),
+		line("Octopus card 5", 0, 800, 40),
+	})
+	got := Times(rows, now, loc, 0)
+	want := []string{
+		"2026-10-13 12:00", "2026-10-12 14:05", "2026-10-11 15:07",
+		"2026-10-21 18:18", // the upload day takes the upload time
+		"2025-12-31 12:00", "2026-10-18 12:00",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d: %+v", len(got), got)
+	}
+	for i, w := range want {
+		if s := got[i].Time.Format("2006-01-02 15:04"); s != w {
+			t.Errorf("time %d (%s) = %s, want %s", i, got[i].Text, s, w)
+		}
+	}
+}

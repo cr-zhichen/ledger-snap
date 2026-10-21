@@ -36,6 +36,7 @@
     "33_pay_failed.jpg": {"status": "rejected"},
     "34_fx_exchange.jpg": {"status": "ok", "kind": "transfer", "money": "7881.80", "currency": "HKD", "converted": "1000.00 USD", "asset": "汇丰One 港元储蓄", "target_asset": "汇丰One 美元储蓄", "time": "2026-10-21 10:15"},
     "35_card_usd.jpg": {"status": "ok", "kind": "expense", "money": "12.99", "currency": "USD", "converted": "93.50 CNY", "asset": "招商银行信用卡(1234)", "time": "2026-10-20 23:12", "merchant": "APPLE"},
-    "36_hkd_spend.jpg": {"status": "ok", "kind": "expense", "money": "45.00", "currency": "HKD", "asset": "汇丰One 港元储蓄", "time": "2026-10-21 08:30", "merchant": "STARBUCKS"}
+    "36_hkd_spend.jpg": {"status": "ok", "kind": "expense", "money": "45.00", "currency": "HKD", "asset": "汇丰One 港元储蓄", "time": "2026-10-21 08:30", "merchant": "STARBUCKS"},
+    "37_card_email_en.jpg": {"status": "ok", "kind": "expense", "money": "11.85", "category": "三餐", "asset": "招行经典白", "time": "2026-10-13 12:00", "merchant": "LUCKIN"}
   }
 }
