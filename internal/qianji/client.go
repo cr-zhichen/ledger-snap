@@ -258,3 +258,26 @@ func (c *Client) Assets(ctx context.Context, s Session, status int) ([]json.RawM
 func (c *Client) Books(ctx context.Context, s Session) ([]json.RawMessage, error) {
 	return c.list(ctx, "/book/list", s, url.Values{"t": {"1"}})
 }
+
+// Currencies lists the currencies with their prices in CNY.
+func (c *Client) Currencies(ctx context.Context, s Session) ([]json.RawMessage, error) {
+	return c.list(ctx, "/currency/listv2", s, url.Values{})
+}
+
+// BaseCurrency reads the user's base currency from the settings client/init
+// returns; users who never changed it get DefaultCurrency.
+func (c *Client) BaseCurrency(ctx context.Context, s Session) (string, error) {
+	data, err := c.post(ctx, "/client/init", s, url.Values{"v": {"0"}, "vvmark": {"0"}, "newinstall": {"0"}, "upgradealert": {"0"}})
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		Configs struct {
+			Base string `json:"basecur"`
+		} `json:"userconfigs"`
+	}
+	if json.Unmarshal(data, &result) != nil || result.Configs.Base == "" {
+		return DefaultCurrency, nil
+	}
+	return result.Configs.Base, nil
+}

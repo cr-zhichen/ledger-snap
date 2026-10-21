@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"ledger-snap/internal/config"
@@ -182,6 +183,13 @@ func summary(d *recognize.Draft, catalog qianji.Catalog) string {
 	if a, ok := catalog.Asset(d.AssetID); ok {
 		asset = a.Name
 	}
-	return fmt.Sprintf("%s %s · %s · %s · %s · %s [%s]", d.Kind.Label(), d.Money,
+	if a, ok := catalog.Asset(d.TargetID); ok {
+		asset += " → " + a.Name
+	}
+	money := strings.TrimSpace(d.Money + " " + d.Currency)
+	if d.Converted != "" {
+		money += " / " + strings.TrimSpace(d.Converted+" "+d.ConvertedCurrency)
+	}
+	return fmt.Sprintf("%s %s · %s · %s · %s · %s [%s]", d.Kind.Label(), money,
 		mark("category", category), mark("asset", asset), mark("time", d.Time.In(d.Time.Location()).Format("01-02 15:04")), d.Merchant, d.Source)
 }

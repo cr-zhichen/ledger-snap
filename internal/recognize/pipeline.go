@@ -51,6 +51,14 @@ type Draft struct {
 	Merchant   string    `json:"merchant,omitempty"`
 	Uncertain  []string  `json:"uncertain,omitempty"`
 	Source     string    `json:"source"` // decision | fallback
+	// Currency is the code of Money; "" means the account's currency. For a
+	// transfer, Money is the amount sent.
+	Currency string `json:"currency,omitempty"`
+	// Converted is the same bill in another currency, when the screenshot
+	// shows one: what a currency exchange bought, or what a foreign purchase
+	// cost in the card's currency. "" currency means the other account's.
+	Converted         string `json:"converted,omitempty"`
+	ConvertedCurrency string `json:"converted_currency,omitempty"`
 }
 
 func (d *Draft) mark(field string) {
@@ -178,6 +186,7 @@ func (r *Recognizer) Recognize(ctx context.Context, in Input) (*Draft, *Trace, e
 	}
 	r.applyMemory(draft, rows, in, trace)
 	r.finishTime(draft, in)
+	finishCurrency(draft, in.Catalog)
 	return draft, trace, nil
 }
 
@@ -227,16 +236,27 @@ func (r *Recognizer) buildQuestions(rows []Row, trace *Trace, in Input) question
 		{Key: string(KindNone), Description: "不是交易记录"},
 	})
 	amounts := []openrouter.Option{{Key: "none", Description: "截图里没有这笔交易的金额"}}
+	foreign := false
 	for _, a := range trace.Amounts {
-		sign := ""
+		sign, currency := "", ""
 		if a.Negative {
 			sign = "-"
 		} else if a.Positive {
 			sign = "+"
 		}
-		amounts = append(amounts, openrouter.Option{Key: a.Key, Description: fmt.Sprintf("%s%s（所在行：%s）", sign, a.Value, a.Context)})
+		if a.Currency != "" {
+			currency = " " + a.Currency
+		}
+		foreign = foreign || (a.Currency != "" && a.Currency != "CNY")
+		amounts = append(amounts, openrouter.Option{Key: a.Key, Description: fmt.Sprintf("%s%s%s（所在行：%s）", sign, a.Value, currency, a.Context)})
 	}
-	qs.questions["amount"] = openrouter.ChoiceQuestion("这笔交易实际付款或到账的金额是哪一个？还没付款时选要付的金额；有优惠时选优惠后的实付金额，不要选原价、优惠金额、余额或订单号。", amounts)
+	qs.questions["amount"] = openrouter.ChoiceQuestion("这笔交易实际付款或到账的金额是哪一个？还没付款时选要付的金额；有优惠时选优惠后的实付金额，不要选原价、优惠金额、余额或订单号。换汇或跨币种转账时选卖出、转出的金额；外币消费同时显示原币和折算金额时选原币金额。", amounts)
+	if foreign {
+		// Only screenshots that show a foreign currency can carry a second
+		// amount in another currency.
+		qs.questions["converted"] = openrouter.ChoiceQuestion("截图里有没有同一笔交易换成另一种币种的金额？换汇或跨币种转账时是买入、转入的金额；外币消费时是账户实际扣款、入账或折合人民币的金额。",
+			append([]openrouter.Option{{Key: "none", Description: "没有另一种币种的金额"}}, amounts[1:]...))
+	}
 	times := []openrouter.Option{{Key: "none", Description: "截图里没有这笔交易的发生时间（顶部状态栏的时钟不算）"}}
 	for _, t := range trace.Times {
 		times = append(times, openrouter.Option{Key: t.Key, Description: fmt.Sprintf("%s（所在行：%s）", t.Text, t.Context)})
@@ -325,7 +345,14 @@ func (r *Recognizer) interpret(ans map[string]openrouter.Answer, qs questionSet,
 	if money == "" || p < th.Amount {
 		return nil, fmt.Sprintf("金额不确定（%s %.2f）", ans["amount"].Choice, p)
 	}
-	d.Money = money
+	d.Money, d.Currency = money, currencyOf(trace.Amounts, money)
+	if c, ok := ans["converted"]; ok {
+		if v, p := pickAmount(trace.Amounts, c); v != "" && p >= th.Amount {
+			if cur := currencyOf(trace.Amounts, v); v != money || cur != d.Currency {
+				d.Converted, d.ConvertedCurrency = v, cur
+			}
+		}
+	}
 	if t := ans["time"]; t.Choice != "none" {
 		for _, c := range trace.Times {
 			if c.Key == t.Choice {
@@ -387,6 +414,36 @@ func pickAmount(cands []AmountCandidate, ans openrouter.Answer) (string, float64
 		}
 	}
 	return money, p
+}
+
+// currencyOf returns the currency shown with any row that has this amount.
+func currencyOf(cands []AmountCandidate, value string) string {
+	for _, c := range cands {
+		if c.Value == value && c.Currency != "" {
+			return c.Currency
+		}
+	}
+	return ""
+}
+
+// finishCurrency resolves a bare "$" against the accounts' currencies. A
+// detected currency is kept even when it matches the account, so switching
+// to another account later does not change what was paid.
+func finishCurrency(d *Draft, c qianji.Catalog) {
+	if d.Status != "ok" {
+		return
+	}
+	var accounts []string
+	for _, id := range []string{d.AssetID, d.TargetID} {
+		if cur, ok := c.AssetCurrency(id); ok {
+			accounts = append(accounts, cur)
+		}
+	}
+	d.Currency = resolveDollar(d.Currency, accounts...)
+	d.ConvertedCurrency = resolveDollar(d.ConvertedCurrency, accounts...)
+	if d.Converted == "" {
+		d.ConvertedCurrency = ""
+	}
 }
 
 // merchantName strips a leading field label such as "交易商户 ".

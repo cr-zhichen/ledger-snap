@@ -68,6 +68,9 @@ type AmountCandidate struct {
 	Positive bool   `json:"positive"` // explicit "+"
 	Context  string `json:"context"`  // the whole row
 	Height   int    `json:"height"`
+	// Currency is the code written next to the amount or named in its row,
+	// Dollar for a bare "$", or "" when none is shown.
+	Currency string `json:"currency,omitempty"`
 }
 
 // Dashes include the en and em dashes OCR often returns for a minus sign.
@@ -75,8 +78,9 @@ const dashes = `\-−–—`
 
 var (
 	amountRe = regexp.MustCompile(`([+` + dashes + `])?\s*([¥￥])?\s*(\d{1,3}(?:,\d{3})+|\d+)(\.\d{1,2})?\s*(元)?`)
-	// Spans that must not be read as amounts: dates, clock times, percentages.
-	notAmountRe = regexp.MustCompile(`\d{4}[` + dashes + `/.年]\d{1,2}[` + dashes + `/.月]\d{1,2}日?|\d{1,2}[` + dashes + `/月]\d{1,2}日?\s+\d{1,2}:\d{2}|\d{1,2}:\d{2}(?::\d{2})?|\d+(?:\.\d+)?\s*%`)
+	// Spans that must not be read as amounts: dates, clock times, percentages,
+	// and exchange rates ("1 USD = 7.8809 HKD", numbers with 3+ decimals).
+	notAmountRe = regexp.MustCompile(`\d{4}[` + dashes + `/.年]\d{1,2}[` + dashes + `/.月]\d{1,2}日?|\d{1,2}[` + dashes + `/月]\d{1,2}日?\s+\d{1,2}:\d{2}|\d{1,2}:\d{2}(?::\d{2})?|\d+(?:\.\d+)?\s*%|\d+(?:\.\d+)?\s*[A-Z]{3}\s*[=＝]|\d+\.\d{3,}`)
 	amountLabel = regexp.MustCompile(`金额|实付|合计|付款|支付|收款|到账|消费|总计|应付|已付`)
 )
 
@@ -92,12 +96,17 @@ func Amounts(rows []Row, limit int) []AmountCandidate {
 				if inside(blocked, m[0], m[1]) {
 					continue
 				}
-				sign, currency, whole, frac, yuan := part(text, m, 1), part(text, m, 2), part(text, m, 3), part(text, m, 4), part(text, m, 5)
+				sign, whole, frac := part(text, m, 1), part(text, m, 3), part(text, m, 4)
 				digits := strings.ReplaceAll(whole, ",", "")
 				if len(digits) > 9 {
 					continue // order numbers, card numbers
 				}
-				if frac == "" && currency == "" && yuan == "" && !amountLabel.MatchString(row.Text) {
+				numEnd := m[7]
+				if m[8] >= 0 {
+					numEnd = m[9]
+				}
+				currency, marked := amountCurrency(text[:m[6]], text[numEnd:], row.Text)
+				if frac == "" && !marked && !amountLabel.MatchString(row.Text) {
 					continue
 				}
 				value, err := normalizeMoney(digits + frac)
@@ -111,7 +120,7 @@ func Amounts(rows []Row, limit int) []AmountCandidate {
 				seen[key] = true
 				out = append(out, AmountCandidate{
 					Value: value, Negative: sign != "" && sign != "+", Positive: sign == "+",
-					Context: row.Text, Height: line.H,
+					Context: row.Text, Height: line.H, Currency: currency,
 				})
 			}
 		}

@@ -43,6 +43,31 @@ type BillInput struct {
 	Remark     string
 	FromName   string // transfers only, shown by the app as "A->B"
 	TargetName string
+	Currency   *Currency // nil when only the base currency is involved
+}
+
+// Currency is a bill's extra.curr. Money is always in the paying account's
+// currency (for transfers, the source account's); Qianji moves the target
+// account of a transfer by TargetValue and reports statistics in BaseValue.
+// Pairs with an empty symbol are left out, as the app does.
+type Currency struct {
+	Source, SourceValue string // the currency the user paid in
+	Target, TargetValue string // the account's currency; a transfer's target account
+	Base, BaseValue     string // the user's base currency
+}
+
+func (c Currency) extra() map[string]any {
+	out := map[string]any{}
+	for _, p := range []struct{ symKey, valKey, sym, val string }{
+		{"ss", "sv", c.Source, c.SourceValue},
+		{"ts", "tv", c.Target, c.TargetValue},
+		{"bs", "bv", c.Base, c.BaseValue},
+	} {
+		if p.sym != "" {
+			out[p.symKey], out[p.valKey] = p.sym, json.Number(p.val)
+		}
+	}
+	return out
 }
 
 // NewBill builds a full bill object. Every ID field must be present: the
@@ -63,10 +88,17 @@ func NewBill(uid, id string, in BillInput) map[string]any {
 		"cateid": orNoID(in.CategoryID), "assetid": orNoID(in.AssetID),
 		"fromid": orNoID(in.FromID), "targetid": orNoID(in.TargetID),
 	}
+	extra := map[string]any{}
 	if in.Type == TypeTransfer || in.Type == TypeCreditPayment {
-		bill["extra"] = map[string]any{"transfee": json.Number("0")}
+		extra["transfee"] = json.Number("0")
 		bill["fromact"], bill["targetact"] = in.FromName, in.TargetName
 		bill["descinfo"] = in.FromName + "->" + in.TargetName
+	}
+	if in.Currency != nil {
+		extra["curr"] = in.Currency.extra()
+	}
+	if len(extra) > 0 {
+		bill["extra"] = extra
 	}
 	return bill
 }

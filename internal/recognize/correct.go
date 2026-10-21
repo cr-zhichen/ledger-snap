@@ -26,8 +26,22 @@ type CorrectionTrace struct {
 
 type correctionFields struct {
 	Amount   string `json:"amount"`
+	Currency string `json:"currency"`
 	Time     string `json:"time"`
 	Merchant string `json:"merchant"`
+}
+
+// moneyText shows a draft's amount with its currency and the converted
+// amount, e.g. "3940.45 HKD（另一币种 500.00 USD）".
+func moneyText(d *Draft) string {
+	s := d.Money
+	if d.Currency != "" {
+		s += " " + d.Currency
+	}
+	if d.Converted != "" {
+		s += "（另一币种 " + strings.TrimSpace(d.Converted+" "+d.ConvertedCurrency) + "）"
+	}
+	return s
 }
 
 // Describe renders a draft as plain text for the models.
@@ -41,14 +55,14 @@ func Describe(d *Draft, c qianji.Catalog, loc *time.Location) string {
 	when := d.Time.In(loc).Format("2006-01-02 15:04")
 	if d.Kind.IsTransfer() {
 		return fmt.Sprintf("类型：%s；金额：%s；转出账户：%s；转入账户：%s；时间：%s；备注：%s",
-			d.Kind.Label(), d.Money, asset(d.AssetID, "未选择"), asset(d.TargetID, "未选择"), when, d.Merchant)
+			d.Kind.Label(), moneyText(d), asset(d.AssetID, "未选择"), asset(d.TargetID, "未选择"), when, d.Merchant)
 	}
 	category := "未分类"
 	if cat, ok := c.Category(d.CategoryID); ok {
 		category = cat.Path
 	}
 	return fmt.Sprintf("类型：%s；金额：%s；分类：%s；账户：%s；时间：%s；备注：%s",
-		d.Kind.Label(), d.Money, category, asset(d.AssetID, "不关联账户"), when, d.Merchant)
+		d.Kind.Label(), moneyText(d), category, asset(d.AssetID, "不关联账户"), when, d.Merchant)
 }
 
 // Correct applies one free-text correction to a draft and returns the new draft.
@@ -143,6 +157,9 @@ func (r *Recognizer) Correct(ctx context.Context, d *Draft, catalog qianji.Catal
 		if ans["amount"].Noul >= 0.5 && fields.Amount != "" {
 			if m, err := normalizeMoney(strings.ReplaceAll(numberRe.FindString(fields.Amount), ",", "")); err == nil && m != "0.00" {
 				out.Money = m
+				if cur := CurrencyCode(fields.Currency); cur != "" {
+					out.Currency = cur
+				}
 			}
 		}
 		if ans["time"].Noul >= 0.5 && fields.Time != "" {
@@ -178,17 +195,18 @@ var correctionSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
 		"amount":   map[string]any{"type": "string", "description": "新的金额，两位小数；没提到则为空字符串"},
+		"currency": map[string]any{"type": "string", "description": "新金额的币种代码，例如 USD、HKD；没说币种则为空字符串"},
 		"time":     map[string]any{"type": "string", "description": "新的时间，格式 YYYY-MM-DD HH:MM；没提到则为空字符串"},
 		"merchant": map[string]any{"type": "string", "description": "新的备注或商户名称；没提到则为空字符串"},
 	},
-	"required":             []string{"amount", "time", "merchant"},
+	"required":             []string{"amount", "currency", "time", "merchant"},
 	"additionalProperties": false,
 }
 
 func (r *Recognizer) correctFields(ctx context.Context, d *Draft, catalog qianji.Catalog, text string, now time.Time) (*correctionFields, float64, error) {
 	cfg := r.Config.Correction
 	loc := r.Config.Location()
-	prompt := fmt.Sprintf("用户刚记了一笔账：%s\n现在时间（北京时间）：%s\n用户的修改意见：%s\n\n从修改意见里提取新的金额、时间和备注。时间按北京时间换算成绝对时间，只说了日期时保留原来的时分；没提到的字段返回空字符串。",
+	prompt := fmt.Sprintf("用户刚记了一笔账：%s\n现在时间（北京时间）：%s\n用户的修改意见：%s\n\n从修改意见里提取新的金额（说了币种时一并提取）、时间和备注。时间按北京时间换算成绝对时间，只说了日期时保留原来的时分；没提到的字段返回空字符串。",
 		Describe(d, catalog, loc), now.In(loc).Format("2006-01-02 15:04（Monday）"), text)
 	req := openrouter.ChatRequest{
 		Model:          cfg.Model,

@@ -158,7 +158,7 @@ func (s *Server) update(w http.ResponseWriter, r *http.Request, u *store.User) {
 	body := readBody(r)
 	p := app.Patch{}
 	for name, dst := range map[string]*string{"kind": &p.Kind, "category": &p.Category, "asset": &p.Asset,
-		"target_asset": &p.TargetAsset, "money": &p.Money, "time": &p.Time, "remark": &p.Remark} {
+		"target_asset": &p.TargetAsset, "money": &p.Money, "other": &p.Other, "time": &p.Time, "remark": &p.Remark} {
 		*dst = strings.TrimSpace(field(r, body, name))
 	}
 	res, err := s.App.Update(r.Context(), u, r.PathValue("id"), p)

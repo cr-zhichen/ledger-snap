@@ -210,6 +210,8 @@ func (s *Server) advance(ctx context.Context, u *store.User, id string, path []s
 		return s.patch(ctx, u, id, p)
 	case "money":
 		return s.patch(ctx, u, id, app.Patch{Money: strings.ReplaceAll(value, ",", "")})
+	case "other":
+		return s.patch(ctx, u, id, app.Patch{Other: strings.ReplaceAll(value, ",", "")})
 	case "time":
 		return s.patch(ctx, u, id, app.Patch{Time: value})
 	case "text":
@@ -258,6 +260,13 @@ func (s *Server) editChoice(ctx context.Context, u *store.User, id, value string
 		return nil, err
 	}
 	kind := kindOf(cur.Kind)
+	if o := otherOption(cur); o != "" && value == o {
+		prompt := o + "，单位 " + cur.OtherCurrency
+		if cur.Other != "" {
+			prompt += "（现在是 " + cur.Other + "）"
+		}
+		return &Step{Action: "number", Prompt: prompt, Next: flowPath(id, "other")}, nil
+	}
 	switch value {
 	case optAsset:
 		if kind.IsTransfer() {
@@ -280,7 +289,7 @@ func (s *Server) editChoice(ctx context.Context, u *store.User, id, value string
 		}
 		return s.pickCategory(ctx, u, id, kind)
 	case optMoney:
-		return &Step{Action: "number", Prompt: "金额（现在是 " + cur.Money + "）", Next: flowPath(id, "money")}, nil
+		return &Step{Action: "number", Prompt: "金额（现在是 " + strings.TrimSpace(cur.Money+" "+cur.Currency) + "）", Next: flowPath(id, "money")}, nil
 	case optTime:
 		return &Step{Action: "text", Prompt: "时间，格式如 " + cur.Time, Default: cur.Time, Next: flowPath(id, "time")}, nil
 	case optText:
@@ -371,7 +380,11 @@ func editStep(cur *app.Result, note string) *Step {
 	if !kindOf(cur.Kind).IsTransfer() {
 		opts = append(opts, optCategory)
 	}
-	opts = append(opts, optMoney, optTime, optText, optRefresh)
+	opts = append(opts, optMoney)
+	if o := otherOption(cur); o != "" {
+		opts = append(opts, o)
+	}
+	opts = append(opts, optTime, optText, optRefresh)
 	step := chooseEdit(withNote(note, "改哪一项？\n"+cur.Summary), opts, cur.RecordID, "edit")
 	step.RecordID = cur.RecordID
 	return step
@@ -379,6 +392,15 @@ func editStep(cur *app.Result, note string) *Step {
 
 func chooseEdit(prompt string, options []string, id string, path ...string) *Step {
 	return choose(prompt, append([]string{optBack}, options...), id, path...)
+}
+
+// otherOption names the menu entry for the other side of a two-currency
+// bill, or "" when only one currency is involved.
+func otherOption(cur *app.Result) string {
+	if cur.OtherCurrency == "" {
+		return ""
+	}
+	return app.OtherLabel(kindOf(cur.Kind))
 }
 
 func choose(prompt string, options []string, id string, path ...string) *Step {

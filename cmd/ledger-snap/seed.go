@@ -10,7 +10,8 @@ import (
 )
 
 // testAssets are deliberately easy to confuse: shared card tails across
-// banks, tails kept in the remark instead of the name, and several wallets.
+// banks, tails kept in the remark instead of the name, several wallets, and
+// one bank account per currency sharing an account number.
 var testAssets = []qianji.AssetSpec{
 	{Name: "招商银行信用卡(1234)", Type: 2, SubType: 21},
 	{Name: "招行经典白", Remark: "信用卡 尾号8888", Type: 2, SubType: 21},
@@ -23,6 +24,8 @@ var testAssets = []qianji.AssetSpec{
 	{Name: "花呗", Type: 2, SubType: 22},
 	{Name: "微信零钱", Type: 1, SubType: 14},
 	{Name: "零钱通", Type: 1, SubType: 14},
+	{Name: "汇丰One 港元储蓄", Remark: "尾号833", Type: 1, SubType: 12, Currency: "HKD"},
+	{Name: "汇丰One 美元储蓄", Remark: "尾号833", Type: 1, SubType: 12, Currency: "USD"},
 }
 
 // runSeedAssets creates the test assets that do not exist yet.

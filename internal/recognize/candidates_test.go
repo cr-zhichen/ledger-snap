@@ -1,6 +1,7 @@
 package recognize
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -42,6 +43,32 @@ func TestAmountsIntegerNeedsMarker(t *testing.T) {
 	got := Amounts(Rows([]ocr.Line{line("¥200", 0, 0, 80), line("共 3 张", 0, 200, 30), line("128 元", 0, 300, 30)}), 0)
 	if len(got) != 2 || got[0].Value != "200.00" || got[1].Value != "128.00" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestAmountCurrencies(t *testing.T) {
+	rows := Rows([]ocr.Line{
+		line("卖出金额", 0, 100, 40), line("3,940.45 HKD", 600, 100, 40),
+		line("买入金额 500.00 USD", 0, 200, 40),
+		line("汇率 1 USD = 7.8809 HKD", 0, 300, 40),
+		line("¥25.00", 0, 400, 40),
+		line("您的信用卡消费USD12.99，入账金额(人民币) 93.50", 0, 500, 40),
+		line("HK$45.00", 0, 600, 40),
+		line("$9.99", 0, 700, 40),
+		line("退回 300港元", 0, 800, 40),
+		line("送5元外卖券", 0, 900, 40),
+		line("交易币种：日元 金额 1,200", 0, 1000, 40),
+	})
+	got := map[string]string{}
+	for _, a := range Amounts(rows, 0) {
+		got[a.Value] = a.Currency
+	}
+	want := map[string]string{
+		"3940.45": "HKD", "500.00": "USD", "300.00": "HKD", "25.00": "CNY", "12.99": "USD", "93.50": "",
+		"45.00": "HKD", "9.99": Dollar, "5.00": "CNY", "1200.00": "JPY",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got  %v\nwant %v", got, want)
 	}
 }
 

@@ -154,7 +154,17 @@ func (s *Service) refreshCatalog(ctx context.Context, u *store.User) (qianji.Cat
 		if err != nil {
 			return err
 		}
-		catalog, err = qianji.ParseCatalog(cats, assets)
+		if catalog, err = qianji.ParseCatalog(cats, assets); err != nil {
+			return err
+		}
+		currencies, err := s.Qianji.Currencies(ctx, qs)
+		if err != nil {
+			return err
+		}
+		if catalog.Prices, err = qianji.ParsePrices(currencies); err != nil {
+			return err
+		}
+		catalog.BaseCurrency, err = s.Qianji.BaseCurrency(ctx, qs)
 		return err
 	})
 	if err != nil {
@@ -168,7 +178,8 @@ func (s *Service) refreshCatalog(ctx context.Context, u *store.User) (qianji.Cat
 func (s *Service) catalog(ctx context.Context, u *store.User) (qianji.Catalog, error) {
 	if u.Catalog != "" && time.Since(time.Unix(u.CatalogAt, 0)) < s.Config.Qianji.CatalogTTL.Duration {
 		var c qianji.Catalog
-		if err := json.Unmarshal([]byte(u.Catalog), &c); err == nil {
+		// Catalogs cached before currency support have no prices.
+		if err := json.Unmarshal([]byte(u.Catalog), &c); err == nil && len(c.Prices) > 0 {
 			return c, nil
 		}
 	}
@@ -184,16 +195,24 @@ type Result struct {
 	Reason    string   `json:"reason,omitempty"`
 	Uncertain []string `json:"uncertain,omitempty"`
 	Money     string   `json:"money,omitempty"`
-	Time      string   `json:"time,omitempty"` // TimeLayout
+	Currency  string   `json:"currency,omitempty"` // of Money; "" is the account's
+	// Other is the other side of a two-currency bill: what a transfer's
+	// target received, or what a foreign purchase cost in the account's
+	// currency.
+	Other         string `json:"other,omitempty"`
+	OtherCurrency string `json:"other_currency,omitempty"`
+	Time          string `json:"time,omitempty"` // TimeLayout
 }
 
 // TimeLayout is how times are shown to and typed by the user.
 const TimeLayout = "2006-01-02 15:04"
 
-func (s *Service) result(rec *store.Record, d *recognize.Draft) *Result {
+func (s *Service) result(rec *store.Record, d *recognize.Draft, c qianji.Catalog) *Result {
 	res := &Result{RecordID: rec.ID, Status: rec.Status, Kind: d.Kind.Label(), Summary: rec.Summary, Uncertain: d.Uncertain}
 	if rec.Summary != "" {
-		res.Money, res.Time = d.Money, d.Time.In(s.Config.Location()).Format(TimeLayout)
+		res.Money, res.Currency, res.Time = d.Money, d.Currency, d.Time.In(s.Config.Location()).Format(TimeLayout)
+		m, _ := moneyOf(d, c)
+		res.Other, res.OtherCurrency = m.Other, m.OtherCurrency
 	}
 	return res
 }
@@ -256,6 +275,11 @@ func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, 
 			hold(why)
 			break
 		}
+		m, err := moneyOf(draft, catalog)
+		if err != nil {
+			hold(err.Error())
+			break
+		}
 		if mode == modeEdit && rec.Status == "needs_confirm" {
 			hold("已修改，确认无误后点确认记账")
 			break
@@ -267,6 +291,10 @@ func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, 
 			}
 			if dup != nil {
 				hold("可能重复：" + time.Unix(dup.CreatedAt, 0).In(s.Config.Location()).Format("15:04") + " 已记过「" + dup.Summary + "」")
+				break
+			}
+			if m.Estimated {
+				hold(fmt.Sprintf("截图里没有%s，按钱迹汇率估算为 %s %s。确认无误点确认，不对就修改%s", OtherLabel(draft.Kind), m.Other, m.OtherCurrency, OtherLabel(draft.Kind)))
 				break
 			}
 			if s.Config.Recognize.ConfirmUncertain && len(draft.Uncertain) > 0 {
@@ -286,7 +314,7 @@ func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, 
 	if err := s.Store.SaveRecord(ctx, rec); err != nil {
 		return nil, err
 	}
-	res := s.result(rec, draft)
+	res := s.result(rec, draft, catalog)
 	res.Reason = reason
 	if res.Summary == "" {
 		res.Summary = reason
@@ -343,8 +371,8 @@ func billType(k recognize.Kind) int {
 	return qianji.TypeExpense
 }
 
-func billInput(d *recognize.Draft, c qianji.Catalog) qianji.BillInput {
-	in := qianji.BillInput{Type: billType(d.Kind), Money: d.Money, Time: d.Time, Remark: d.Merchant}
+func billInput(d *recognize.Draft, c qianji.Catalog, m billMoney) qianji.BillInput {
+	in := qianji.BillInput{Type: billType(d.Kind), Money: m.Value, Currency: m.Currency, Time: d.Time, Remark: d.Merchant}
 	if d.Kind.IsTransfer() {
 		from, _ := c.Asset(d.AssetID)
 		target, _ := c.Asset(d.TargetID)
@@ -362,7 +390,11 @@ func isTransferType(t int) bool { return t == qianji.TypeTransfer || t == qianji
 // Switching between an ordinary bill and a transfer replaces the bill with a
 // new ID instead of changing its type in place.
 func (s *Service) write(ctx context.Context, u *store.User, rec *store.Record, d *recognize.Draft, catalog qianji.Catalog) error {
-	input := billInput(d, catalog)
+	m, err := moneyOf(d, catalog)
+	if err != nil {
+		return userErr(400, "%v", err)
+	}
+	input := billInput(d, catalog, m)
 	var deletes []string
 	if rec.BillID != "" && rec.Bill != "" {
 		var old struct {
@@ -382,7 +414,7 @@ func (s *Service) write(ctx context.Context, u *store.User, rec *store.Record, d
 		receipt, err = s.Qianji.SyncBills(ctx, qs, []map[string]any{bill}, deletes)
 		return err
 	}
-	err := s.withSession(ctx, u, send)
+	err = s.withSession(ctx, u, send)
 	if qianji.IsKind(err, qianji.ErrNetwork) {
 		err = s.withSession(ctx, u, send)
 	}
@@ -417,7 +449,11 @@ func (s *Service) Current(ctx context.Context, u *store.User, id string) (*Resul
 	if err != nil {
 		return nil, err
 	}
-	res := s.result(rec, d)
+	catalog, err := s.catalog(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	res := s.result(rec, d, catalog)
 	if rec.Status == "needs_confirm" {
 		res.Reason = "还没记账，确认无误点确认"
 	}
@@ -551,7 +587,11 @@ func Summary(d *recognize.Draft, c qianji.Catalog, loc *time.Location) string {
 		}
 		return empty
 	}
-	parts := []string{d.Kind.Label() + " " + d.Money}
+	amount := d.Money
+	if m, err := moneyOf(d, c); err == nil {
+		amount = m.Text
+	}
+	parts := []string{d.Kind.Label() + " " + amount}
 	if d.Kind.IsTransfer() {
 		parts = append(parts, mark("asset", name(d.AssetID, "转出账户?"))+" → "+mark("target_asset", name(d.TargetID, "转入账户?")))
 	} else {
@@ -629,8 +669,10 @@ type Patch struct {
 	Asset       string `json:"asset"`
 	TargetAsset string `json:"target_asset"`
 	Money       string `json:"money"`
-	Time        string `json:"time"` // TimeLayout
-	Remark      string `json:"remark"`
+	// Other sets the other side of a two-currency bill (see Result.Other).
+	Other  string `json:"other"`
+	Time   string `json:"time"` // TimeLayout
+	Remark string `json:"remark"`
 }
 
 // NoAsset is the picker entry for "no account".
@@ -700,12 +742,33 @@ func (s *Service) applyPatch(d *recognize.Draft, p Patch, c qianji.Catalog) (*re
 	} else {
 		out.CategoryID = ""
 	}
-	if p.Money != "" {
-		v, err := strconv.ParseFloat(strings.TrimSpace(p.Money), 64)
+	parseMoney := func(s string) (string, error) {
+		v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
 		if err != nil || v <= 0 || v > 9999999999.99 {
-			return nil, userErr(400, "金额不对：%s", p.Money)
+			return "", userErr(400, "金额不对：%s", s)
 		}
-		out.Money = strconv.FormatFloat(v, 'f', 2, 64)
+		return strconv.FormatFloat(v, 'f', 2, 64), nil
+	}
+	if p.Money != "" {
+		if out.Money, err = parseMoney(p.Money); err != nil {
+			return nil, err
+		}
+	}
+	if p.Other != "" {
+		v, err := parseMoney(p.Other)
+		if err != nil {
+			return nil, err
+		}
+		m, _ := moneyOf(&out, c)
+		switch {
+		case m.OtherCurrency == "":
+			return nil, userErr(400, "这笔账只涉及一种币种，改金额就行")
+		case out.Currency == m.OtherCurrency:
+			// The recognized amount is already the other side.
+			out.Money = v
+		default:
+			out.Converted, out.ConvertedCurrency = v, m.OtherCurrency
+		}
 	}
 	if p.Time != "" {
 		t, err := time.ParseInLocation(TimeLayout, strings.TrimSpace(p.Time), s.Config.Location())

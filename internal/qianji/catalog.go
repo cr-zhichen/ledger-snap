@@ -32,6 +32,75 @@ const AssetTypeCredit = 2
 type Catalog struct {
 	Categories []Category `json:"categories"`
 	Assets     []Asset    `json:"assets"`
+	// BaseCurrency is the user's base currency; empty means DefaultCurrency.
+	BaseCurrency string `json:"base_currency,omitempty"`
+	// Prices maps a currency code to the price of one unit in CNY, as
+	// currency/listv2 reports it.
+	Prices map[string]float64 `json:"prices,omitempty"`
+}
+
+// DefaultCurrency is the base currency of users who never picked one, and
+// the currency of assets that do not name one.
+const DefaultCurrency = "CNY"
+
+func (c Catalog) Base() string {
+	if c.BaseCurrency == "" {
+		return DefaultCurrency
+	}
+	return c.BaseCurrency
+}
+
+// AssetCurrency returns the asset's currency; ok is false when the asset is
+// not in the catalog.
+func (c Catalog) AssetCurrency(id string) (string, bool) {
+	a, ok := c.Asset(id)
+	if !ok {
+		return "", false
+	}
+	if a.Currency == "" {
+		return DefaultCurrency, true
+	}
+	return a.Currency, true
+}
+
+// Convert converts an amount with Qianji's prices, the same ones the app
+// suggests; ok is false when a price is missing.
+func (c Catalog) Convert(amount float64, from, to string) (float64, bool) {
+	if from == to {
+		return amount, true
+	}
+	price := func(code string) float64 {
+		if p := c.Prices[code]; p > 0 {
+			return p
+		}
+		if code == "CNY" {
+			return 1
+		}
+		return 0
+	}
+	pf, pt := price(from), price(to)
+	if pf == 0 || pt == 0 {
+		return 0, false
+	}
+	return amount * pf / pt, true
+}
+
+// ParsePrices reads currency/listv2 items, whose baseprice is a string.
+func ParsePrices(items []json.RawMessage) (map[string]float64, error) {
+	prices := map[string]float64{}
+	for _, raw := range items {
+		var item struct {
+			Symbol string      `json:"symbol"`
+			Price  json.Number `json:"baseprice"`
+		}
+		if err := decodeNumbers(raw, &item); err != nil {
+			return nil, err
+		}
+		if p, err := item.Price.Float64(); err == nil && p > 0 && item.Symbol != "" {
+			prices[item.Symbol] = p
+		}
+	}
+	return prices, nil
 }
 
 type rawCategory struct {
@@ -137,11 +206,12 @@ func (c Catalog) Leaves(kind int) []Category {
 // type 1 money (stype 11 cash, 12 debit card, 13 Alipay, 14 WeChat, 103
 // Yu'e Bao) and type 2 credit (stype 21 credit card, 22 Huabei).
 type AssetSpec struct {
-	Name    string
-	Remark  string
-	Type    int
-	SubType int
-	Icon    string
+	Name     string
+	Remark   string
+	Type     int
+	SubType  int
+	Icon     string
+	Currency string // DefaultCurrency when empty
 }
 
 // AssetIcons maps asset subtype to the app's icon URL via /asset/typelist.
@@ -182,9 +252,13 @@ func (c *Client) AssetIcons(ctx context.Context, s Session) (map[int]string, err
 
 // CreateAsset adds an asset account through /asset/submit and returns its ID.
 func (c *Client) CreateAsset(ctx context.Context, s Session, spec AssetSpec) (string, error) {
+	currency := spec.Currency
+	if currency == "" {
+		currency = DefaultCurrency
+	}
 	asset := map[string]any{
 		"name": spec.Name, "remark": spec.Remark, "type": spec.Type, "stype": spec.SubType,
-		"money": 0, "currency": "CNY", "incount": 1, "status": 0, "userid": s.UID, "icon": spec.Icon,
+		"money": 0, "currency": currency, "incount": 1, "status": 0, "userid": s.UID, "icon": spec.Icon,
 	}
 	if spec.Type == AssetTypeCredit {
 		// Credit accounts are rejected without billing-cycle info.
