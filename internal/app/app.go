@@ -330,7 +330,7 @@ func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, 
 			break
 		}
 		if mode == modeEdit && rec.Status == "needs_confirm" {
-			hold("已修改，确认无误后点确认记账")
+			hold("")
 			break
 		}
 		if mode == modeNew {
@@ -343,7 +343,7 @@ func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, 
 				break
 			}
 			if m.Estimated {
-				hold(fmt.Sprintf("截图里没有%s，按钱迹汇率估算为 %s %s。确认无误点确认，不对就修改%s", OtherLabel(draft.Kind), m.Other, m.OtherCurrency, OtherLabel(draft.Kind)))
+				hold(fmt.Sprintf("截图里没有%s，按钱迹汇率估算为 %s %s，不对就修改%s", OtherLabel(draft.Kind), m.Other, m.OtherCurrency, OtherLabel(draft.Kind)))
 				break
 			}
 			if s.Config.Recognize.ConfirmUncertain && len(draft.Uncertain) > 0 {
@@ -351,7 +351,7 @@ func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, 
 				for _, f := range draft.Uncertain {
 					names = append(names, fieldNames[f])
 				}
-				hold("有几项拿不准：" + strings.Join(names, "、") + "。确认无误点确认，不对就修改")
+				hold("有几项拿不准：" + strings.Join(names, "、"))
 				break
 			}
 		}
@@ -502,11 +502,7 @@ func (s *Service) Current(ctx context.Context, u *store.User, id string) (*Resul
 	if err != nil {
 		return nil, err
 	}
-	res := s.result(rec, d, catalog)
-	if rec.Status == "needs_confirm" {
-		res.Reason = "还没记账，确认无误点确认"
-	}
-	return res, nil
+	return s.result(rec, d, catalog), nil
 }
 
 // Confirm writes a record that was held back, e.g. as a possible duplicate.
@@ -865,11 +861,17 @@ func (s *Service) Update(ctx context.Context, u *store.User, id string, p Patch)
 	return s.commitEdit(ctx, u, rec, d, next, catalog)
 }
 
-// commitEdit writes an edited draft. A written bill is never replaced by an
-// incomplete transfer, so the bill in Qianji always matches the record.
+// commitEdit writes an edited draft. A written bill is never replaced by one
+// that cannot be written, such as an incomplete transfer, so the bill in
+// Qianji always matches the record and a written record stays written.
 func (s *Service) commitEdit(ctx context.Context, u *store.User, rec *store.Record, before, after *recognize.Draft, catalog qianji.Catalog) (*Result, error) {
-	if why := transferProblem(after, catalog); why != "" && rec.Status == "written" {
-		return nil, userErr(400, "%s", strings.Replace(why, "请点修改选择", "请一起选好", 1))
+	if rec.Status == "written" {
+		if why := transferProblem(after, catalog); why != "" {
+			return nil, userErr(400, "%s", strings.Replace(why, "请点修改选择", "请一起选好", 1))
+		}
+		if _, err := moneyOf(after, catalog); err != nil {
+			return nil, userErr(400, "%v", err)
+		}
 	}
 	s.learn(ctx, u, rec, before, after)
 	return s.settle(ctx, u, rec, after, catalog, modeEdit)

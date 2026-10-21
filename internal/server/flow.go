@@ -39,11 +39,15 @@ type Step struct {
 	RecordID string `json:"record_id,omitempty"`
 }
 
-// Menu entries; the server matches answers against these.
+// Menu entries; the server matches answers against these. A written bill and
+// one still held back get different words, so the menu itself says whether
+// the bill is in Qianji yet.
 const (
-	optConfirm  = "确认"
+	optDone     = "完成"
+	optRemove   = "从钱迹删除"
+	optConfirm  = "确认记账"
+	optDiscard  = "不记了"
 	optEdit     = "修改"
-	optDelete   = "删除"
 	optAsset    = "账户"
 	optKind     = "收支类型"
 	optCategory = "分类"
@@ -111,7 +115,11 @@ func (s *Server) flowStep(w http.ResponseWriter, r *http.Request, u *store.User)
 		s.failStep(w, r, err)
 		return
 	}
-	writeJSON(w, 200, mainStep(cur, "没改成："+s.message(r, err)))
+	failed := "没改成："
+	if r.PathValue("step") == "main" {
+		failed = "没成功："
+	}
+	writeJSON(w, 200, mainStep(cur, failed+s.message(r, err)))
 }
 
 // failStep ends the run with an error message; an auth failure also makes the
@@ -216,7 +224,7 @@ func (s *Server) advance(ctx context.Context, u *store.User, id string, path []s
 		if err != nil {
 			return nil, err
 		}
-		return mainStep(res, ""), nil
+		return editedStep(res), nil
 	}
 	return nil, &app.UserError{Status: http.StatusNotFound, Message: "快捷指令和服务端版本不匹配，请重新安装快捷指令"}
 }
@@ -244,8 +252,8 @@ func (s *Server) mainChoice(ctx context.Context, u *store.User, id, value string
 		return nil, err
 	}
 	switch value {
-	case optConfirm:
-		if cur.Status == "needs_confirm" {
+	case optDone, optConfirm:
+		if value == optConfirm && cur.Status == "needs_confirm" {
 			if cur, err = s.App.Confirm(ctx, u, id); err != nil {
 				return nil, err
 			}
@@ -256,7 +264,7 @@ func (s *Server) mainChoice(ctx context.Context, u *store.User, id, value string
 		// Still held, e.g. a transfer without both accounts: show why.
 	case optEdit:
 		return editStep(cur, ""), nil
-	case optDelete:
+	case optRemove, optDiscard:
 		if _, err := s.App.Delete(ctx, u, id); err != nil {
 			return nil, err
 		}
@@ -368,11 +376,12 @@ func (s *Server) patch(ctx context.Context, u *store.User, id string, p app.Patc
 	if err != nil {
 		return nil, err
 	}
-	return mainStep(res, ""), nil
+	return editedStep(res), nil
 }
 
-// mainStep shows a record with 确认 / 修改 / 删除, or ends the run when there
-// is nothing left to do.
+// mainStep shows a record with 完成 / 修改 / 从钱迹删除 once it is written,
+// or 确认记账 / 修改 / 不记了 while it is held back, and ends the run when
+// there is nothing left to do.
 func mainStep(res *app.Result, note string) *Step {
 	switch res.Status {
 	case "rejected":
@@ -380,13 +389,22 @@ func mainStep(res *app.Result, note string) *Step {
 	case "deleted", "discarded":
 		return done("这笔已经删除了")
 	}
-	prompt := "已记账：" + res.Summary
+	opts := []string{optDone, optEdit, optRemove}
 	if res.Status == "needs_confirm" {
-		prompt = res.Reason + "\n" + res.Summary
+		opts = []string{optConfirm, optEdit, optDiscard}
 	}
-	step := choose(withNote(note, prompt), []string{optConfirm, optEdit, optDelete}, res.RecordID, "main")
+	step := choose(withNote(note, state(res)), opts, res.RecordID, "main")
 	step.RecordID = res.RecordID
 	return step
+}
+
+// editedStep shows a record after an edit, saying whether Qianji has the
+// change already.
+func editedStep(res *app.Result) *Step {
+	if res.Status == "written" {
+		return mainStep(res, "已改好，钱迹里同步改了")
+	}
+	return mainStep(res, "已改好")
 }
 
 func editStep(cur *app.Result, note string) *Step {
@@ -399,9 +417,24 @@ func editStep(cur *app.Result, note string) *Step {
 		opts = append(opts, o)
 	}
 	opts = append(opts, optTime, optText, optRefresh)
-	step := chooseEdit(withNote(note, "改哪一项？\n"+cur.Summary), opts, cur.RecordID, "edit")
+	prompt := "改哪一项？"
+	if cur.Status == "written" {
+		prompt += "改完直接同步到钱迹"
+	}
+	step := chooseEdit(withNote(note, prompt+"\n"+state(cur)), opts, cur.RecordID, "edit")
 	step.RecordID = cur.RecordID
 	return step
+}
+
+// state starts every dialog about a record with whether it is in Qianji.
+func state(res *app.Result) string {
+	switch {
+	case res.Status == "written":
+		return "已记账：" + res.Summary
+	case res.Reason == "":
+		return "还没记账：" + res.Summary
+	}
+	return "还没记账，" + res.Reason + "\n" + res.Summary
 }
 
 func chooseEdit(prompt string, options []string, id string, path ...string) *Step {
