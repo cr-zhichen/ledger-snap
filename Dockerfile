@@ -17,10 +17,12 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 # The runtime image has no shell; create the data directory here.
 RUN mkdir -p /out/data
 
-FROM gcr.io/distroless/static-debian13:nonroot
+# Starts as root: serve hands /app/data to LEDGER_SNAP_UID:LEDGER_SNAP_GID
+# (65532 by default) and drops to that user before doing anything else.
+FROM gcr.io/distroless/static-debian13
 WORKDIR /app
 COPY --from=build /out/ledger-snap /app/ledger-snap
-COPY --from=build --chown=nonroot:nonroot /out/data /app/data
+COPY --from=build /out/data /app/data
 COPY config.toml /app/config.toml
 EXPOSE 8080
 VOLUME ["/app/data"]

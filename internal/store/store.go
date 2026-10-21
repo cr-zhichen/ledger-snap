@@ -75,7 +75,7 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("初始化数据库: %w", err)
+		return nil, fmt.Errorf("初始化数据库 %s（检查数据目录能否写入）: %w", path, err)
 	}
 	// Credentials live here, so keep the file private.
 	_ = os.Chmod(path, 0o600)

@@ -53,6 +53,9 @@ func runServe(ctx context.Context, args []string) error {
 	if *dataDir != "" {
 		cfg.Server.DataDir = *dataDir
 	}
+	if err := dropRoot(cfg.Server.DataDir); err != nil {
+		return err
+	}
 	svc, err := newService(cfg)
 	if err != nil {
 		return err

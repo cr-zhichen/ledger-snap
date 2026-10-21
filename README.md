@@ -102,20 +102,18 @@ curl -fsSL -o .env https://raw.githubusercontent.com/cr-zhichen/ledger-snap/main
 
 在 `.env` 里填好密钥和邀请码，再改两处：
 
-- `LEDGER_SNAP_UID`、`LEDGER_SNAP_GID` 改成当前用户的 `id -u`、`id -g`：容器以这个身份运行，才能写入 `./data`；
-- `LEDGER_SNAP_IMAGE` 建议固定版本，例如 `ghcr.io/cr-zhichen/ledger-snap:0.1.0`，留空则用 `latest`。
+- `LEDGER_SNAP_UID`、`LEDGER_SNAP_GID` 改成当前用户的 `id -u`、`id -g`；
+- `LEDGER_SNAP_IMAGE` 建议固定版本，例如 `ghcr.io/cr-zhichen/ledger-snap:0.2.1`，留空则用 `latest`。
 
-然后先建好数据目录再启动：
-
-```bash
-mkdir -p data
-```
+然后启动：
 
 ```bash
 docker compose up -d
 ```
 
-如果不先建 `data`，Docker 会以 root 身份创建它，容器就写不进去，启动时会报无法创建数据库。
+`data` 目录不用事先建。容器先以 root 启动，把 `./data` 及其中的文件交给 `LEDGER_SNAP_UID:LEDGER_SNAP_GID`（留空时为 65532），再降到这个用户运行。填了自己的 `id -u`、`id -g`，宿主机上就能直接读写 `data`；填 `0` 表示一直以 root 运行。
+
+v0.2.0 及更早的 `compose.yaml` 里有一行 `user:`，会让容器跳过这一步。从旧版本升级时，请重新下载 `compose.yaml`，或删掉那一行。
 
 **升级**：改 `.env` 里的 `LEDGER_SNAP_IMAGE`，然后：
 
