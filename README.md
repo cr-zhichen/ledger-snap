@@ -4,7 +4,7 @@ iPhone 上轻点背面截图，服务端识别截图里的交易并写入钱迹�
 
 ## 安装快捷指令
 
-在 iPhone 上用 Safari 打开下面的链接，下载后点开文件，按提示添加，并填写服务器地址和邀请码：
+在 iPhone 上用 Safari 打开下面的链接，下载后点开文件，按提示添加；第一次运行时填写服务器地址、邀请码和钱迹账号：
 
 **[下载快捷指令（ledger-snap.shortcut）](https://github.com/cr-zhichen/ledger-snap/releases/latest/download/ledger-snap.shortcut)**
 

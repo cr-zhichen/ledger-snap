@@ -16,8 +16,8 @@ import (
 func runShortcut(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("shortcut", flag.ExitOnError)
 	out := fs.String("out", "dist/截图记账.shortcut", "输出文件；导入后快捷指令的名称就是文件名")
-	server := fs.String("server", "", "安装时“服务器地址”的默认答案")
-	invite := fs.String("invite", "", "安装时“邀请码”的默认答案")
+	server := fs.String("server", "", "第一次登录时“服务器地址”的默认答案")
+	invite := fs.String("invite", "", "第一次登录时“邀请码”的默认答案")
 	unsigned := fs.Bool("unsigned", false, "只生成未签名的 plist，不调用 shortcuts sign")
 	_ = fs.Parse(args)
 

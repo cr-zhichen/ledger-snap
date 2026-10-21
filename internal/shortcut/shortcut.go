@@ -10,14 +10,24 @@ import (
 	"unicode/utf16"
 )
 
-// Options fill in the import questions' default answers.
+// Options fill in the default answers of the first run's login questions.
 type Options struct {
 	Server string
 	Invite string
 }
 
-// TokenFile holds the service token, in the Shortcuts folder of iCloud Drive.
-const TokenFile = "ledger-snap-token.txt"
+// The shortcut keeps its files in DataFolder, inside the Shortcuts folder of
+// iCloud Drive. The server address and invite code are saved on login, so
+// logging in again only asks to confirm them.
+const (
+	DataFolder = "ledger-snap"
+	ServerFile = DataFolder + "/server.txt"
+	InviteFile = DataFolder + "/invite.txt"
+	TokenFile  = DataFolder + "/token.txt"
+)
+
+// oldTokenFile is where earlier versions kept the token.
+const oldTokenFile = "ledger-snap-token.txt"
 
 // Rounds caps the dialogs in one run; a run normally needs two or three.
 const Rounds = 30
@@ -26,20 +36,29 @@ const Rounds = 30
 func Build(o Options) ([]byte, error) {
 	b := &builder{}
 
-	// The import questions fill in these two text actions, found by index.
-	serverIndex := len(b.actions)
-	serverText := b.output("gettext", "Text", dict{"WFTextActionText": o.Server})
-	server := b.set("服务器", b.output("text.replace", "Updated Text", dict{
-		"WFInput":                        text(serverText),
-		"WFReplaceTextFind":              `\s+|/+$`,
-		"WFReplaceTextReplace":           "",
-		"WFReplaceTextRegularExpression": true,
-	}))
-	inviteIndex := len(b.actions)
-	invite := b.set("邀请码", b.output("gettext", "Text", dict{"WFTextActionText": o.Invite}))
-
-	token := b.set("令牌", b.getTokenFile())
+	// No import questions: with them, Shortcuts keeps the setup sheet open
+	// after Add Shortcut. Logging in asks for the server and invite code.
+	server := b.set("服务器", b.getFile(ServerFile))
+	token := variable("令牌")
+	b.ifThen(server, hasValue, func() {
+		b.set("令牌", b.getFile(TokenFile))
+	}, func() {
+		// Without a saved server, log in even if an old token is there.
+		b.set("服务器", b.output("gettext", "Text", dict{"WFTextActionText": o.Server}))
+	})
 	b.ifThen(token, hasNoValue, func() {
+		answer := b.ask("服务器地址，例如 https://snap.example.com", dict{"WFAskActionDefaultAnswer": text(server), "WFAllowsMultilineText": false})
+		b.set("服务器", b.output("text.replace", "Updated Text", dict{
+			"WFInput":                        text(answer),
+			"WFReplaceTextFind":              `\s+|/+$`,
+			"WFReplaceTextReplace":           "",
+			"WFReplaceTextRegularExpression": true,
+		}))
+		invite := b.set("邀请码", b.getFile(InviteFile))
+		b.ifThen(invite, hasNoValue, func() {
+			b.set("邀请码", b.output("gettext", "Text", dict{"WFTextActionText": o.Invite}))
+		}, nil)
+		b.set("邀请码", b.ask("邀请码", dict{"WFAskActionDefaultAnswer": text(invite), "WFAllowsMultilineText": false}))
 		account := b.ask("钱迹账号（手机号或邮箱）", dict{})
 		password := b.ask("钱迹密码", dict{})
 		md5 := b.output("hash", "Hash", dict{"WFInput": attach(password), "WFHashType": "MD5"})
@@ -49,16 +68,24 @@ func Build(o Options) ([]byte, error) {
 		})
 		newToken := b.value(login, "token")
 		b.ifThen(newToken, hasNoValue, func() {
-			b.alert("登录失败", b.value(login, "message"))
+			message := b.value(login, "message")
+			b.ifThen(message, hasValue, func() {
+				b.alert("登录失败", message)
+			}, func() {
+				b.alert("登录失败", "服务器没有正常回应，请检查服务器地址")
+			})
 			b.exit()
 		}, nil)
-		b.action("documentpicker.save", dict{
-			"WFInput":               attach(newToken),
-			"WFFileDestinationPath": TokenFile,
-			"WFSaveFileOverwrite":   true,
-			"WFAskWhereToSave":      false,
-		})
+		// Create the folder before saving into it.
+		folder := b.getFile(DataFolder)
+		b.ifThen(folder, hasNoValue, func() {
+			b.action("file.createfolder", dict{"WFFilePath": DataFolder})
+		}, nil)
+		b.saveFile(server, ServerFile)
+		b.saveFile(invite, InviteFile)
+		b.saveFile(newToken, TokenFile)
 		b.set("令牌", newToken)
+		b.deleteFile(oldTokenFile)
 	}, nil)
 
 	auth := fields("Authorization", text("Bearer ", token))
@@ -79,7 +106,7 @@ func Build(o Options) ([]byte, error) {
 	b.repeat(Rounds, func() {
 		action := b.value(reply, "action")
 		b.ifThen(action, hasNoValue, func() {
-			b.alert("截图记账", "服务器没有正常回应，请检查快捷指令里的服务器地址")
+			b.alert("截图记账", "服务器没有正常回应，请稍后再试。要换服务器地址，删掉「文件」App 里 Shortcuts 文件夹中的 "+TokenFile+"，再运行时会重新登录")
 			b.exit()
 		}, nil)
 		b.ifThen(action, equals("done"), func() {
@@ -91,15 +118,7 @@ func Build(o Options) ([]byte, error) {
 			b.exit()
 		}, nil)
 		b.ifThen(action, equals("relogin"), func() {
-			// Delete Files fails on empty input, so only delete a file that is there.
-			saved := b.getTokenFile()
-			b.ifThen(saved, hasValue, func() {
-				b.action("file.delete", dict{
-					"WFInput":                     attach(saved),
-					"WFDeleteFileConfirmDeletion": false,
-					"WFDeleteImmediatelyDelete":   true,
-				})
-			}, nil)
+			b.deleteFile(TokenFile)
 			b.alert("需要重新登录", b.value(reply, "message"))
 			b.exit()
 		}, nil)
@@ -139,10 +158,6 @@ func Build(o Options) ([]byte, error) {
 			"WFWorkflowIconStartColor":  4292093695, // green
 			"WFWorkflowIconGlyphNumber": 59514,      // yen sign
 		},
-		"WFWorkflowImportQuestions": []any{
-			question(serverIndex, "服务器地址，例如 https://snap.example.com", o.Server),
-			question(inviteIndex, "邀请码", o.Invite),
-		},
 		"WFWorkflowInputContentItemClasses":   []any{},
 		"WFWorkflowOutputContentItemClasses":  []any{},
 		"WFWorkflowTypes":                     []any{},
@@ -150,10 +165,6 @@ func Build(o Options) ([]byte, error) {
 		"WFWorkflowHasShortcutInputVariables": false,
 		"WFWorkflowHasOutputFallback":         false,
 	})
-}
-
-func question(actionIndex int, prompt, answer string) dict {
-	return dict{"ActionIndex": actionIndex, "Category": "Parameter", "ParameterKey": "WFTextActionText", "Text": prompt, "DefaultValue": answer}
 }
 
 // builder appends actions in order. Control flow takes closures, so the Go
@@ -195,8 +206,32 @@ func (b *builder) value(from ref, key string) ref {
 	return b.output("getvalueforkey", "Dictionary Value", dict{"WFInput": attach(from), "WFDictionaryKey": key, "WFGetDictionaryValueType": "Value"})
 }
 
-func (b *builder) getTokenFile() ref {
-	return b.output("documentpicker.open", "File", dict{"WFGetFilePath": TokenFile, "WFFileErrorIfNotFound": false, "WFShowFilePicker": false})
+// getFile reads a file or folder in the Shortcuts folder; a missing one has
+// no value.
+func (b *builder) getFile(path string) ref {
+	return b.output("documentpicker.open", "File", dict{"WFGetFilePath": path, "WFFileErrorIfNotFound": false, "WFShowFilePicker": false})
+}
+
+func (b *builder) saveFile(content ref, path string) {
+	b.action("documentpicker.save", dict{
+		"WFInput":               attach(content),
+		"WFFileDestinationPath": path,
+		"WFSaveFileOverwrite":   true,
+		"WFAskWhereToSave":      false,
+	})
+}
+
+// deleteFile deletes a file in the Shortcuts folder if it is there: Delete
+// Files fails on empty input.
+func (b *builder) deleteFile(path string) {
+	saved := b.getFile(path)
+	b.ifThen(saved, hasValue, func() {
+		b.action("file.delete", dict{
+			"WFInput":                     attach(saved),
+			"WFDeleteFileConfirmDeletion": false,
+			"WFDeleteImmediatelyDelete":   true,
+		})
+	}, nil)
 }
 
 // ask shows Ask for Input; prompt is a string or a ref.
