@@ -168,6 +168,16 @@ func (s *Server) advance(ctx context.Context, u *store.User, id string, path []s
 		}
 		return ""
 	}
+	if value == optBack {
+		switch path[0] {
+		case "kind", "category", "asset", "source", "target":
+			cur, err := s.App.Current(ctx, u, id)
+			if err != nil {
+				return nil, err
+			}
+			return editStep(cur, ""), nil
+		}
+	}
 	switch path[0] {
 	case "main":
 		return s.mainChoice(ctx, u, id, value)
@@ -257,13 +267,13 @@ func (s *Server) editChoice(ctx context.Context, u *store.User, id, value string
 		if err != nil {
 			return nil, err
 		}
-		return choose("用哪个账户？", o.AssetsOrNone, id, "asset"), nil
+		return chooseEdit("用哪个账户？", o.AssetsOrNone, id, "asset"), nil
 	case optKind:
 		var labels []string
 		for _, k := range app.Kinds {
 			labels = append(labels, k.Label())
 		}
-		return choose("改成哪种类型？", labels, id, "kind"), nil
+		return chooseEdit("改成哪种类型？", labels, id, "kind"), nil
 	case optCategory:
 		if kind.IsTransfer() {
 			return editStep(cur, "转账和还款没有分类"), nil
@@ -299,7 +309,7 @@ func (s *Server) pickCategory(ctx context.Context, u *store.User, id string, kin
 	if len(list) == 0 {
 		return nil, &app.UserError{Status: 400, Message: "钱迹里还没有" + kind.Label() + "分类"}
 	}
-	return choose("记到哪个分类？", list, id, "category", string(kind)), nil
+	return chooseEdit("记到哪个分类？", list, id, "category", string(kind)), nil
 }
 
 // pickSource starts choosing both accounts of a transfer; kind is the new
@@ -312,7 +322,7 @@ func (s *Server) pickSource(ctx context.Context, u *store.User, id, kind string)
 	if len(o.Assets) < 2 {
 		return nil, &app.UserError{Status: 400, Message: "转账需要至少两个账户，请先在钱迹里添加"}
 	}
-	return choose("从哪个账户转出？", o.Assets, id, "source", kind), nil
+	return chooseEdit("从哪个账户转出？", o.Assets, id, "source", kind), nil
 }
 
 // pickTarget carries the chosen source account in the path, base64-encoded so
@@ -327,7 +337,7 @@ func (s *Server) pickTarget(ctx context.Context, u *store.User, id, kind, source
 	if kind == string(recognize.KindCredit) {
 		prompt = "还的是哪个信用账户？"
 	}
-	return choose(prompt, targets, id, "target", kind, base64.RawURLEncoding.EncodeToString([]byte(source))), nil
+	return chooseEdit(prompt, targets, id, "target", kind, base64.RawURLEncoding.EncodeToString([]byte(source))), nil
 }
 
 func (s *Server) patch(ctx context.Context, u *store.User, id string, p app.Patch) (*Step, error) {
@@ -361,10 +371,14 @@ func editStep(cur *app.Result, note string) *Step {
 	if !kindOf(cur.Kind).IsTransfer() {
 		opts = append(opts, optCategory)
 	}
-	opts = append(opts, optMoney, optTime, optText, optRefresh, optBack)
-	step := choose(withNote(note, "改哪一项？\n"+cur.Summary), opts, cur.RecordID, "edit")
+	opts = append(opts, optMoney, optTime, optText, optRefresh)
+	step := chooseEdit(withNote(note, "改哪一项？\n"+cur.Summary), opts, cur.RecordID, "edit")
 	step.RecordID = cur.RecordID
 	return step
+}
+
+func chooseEdit(prompt string, options []string, id string, path ...string) *Step {
+	return choose(prompt, append([]string{optBack}, options...), id, path...)
 }
 
 func choose(prompt string, options []string, id string, path ...string) *Step {
