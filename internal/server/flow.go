@@ -168,15 +168,12 @@ func (s *Server) advance(ctx context.Context, u *store.User, id string, path []s
 		}
 		return ""
 	}
-	if value == optBack {
-		switch path[0] {
-		case "kind", "category", "asset", "source", "target":
-			cur, err := s.App.Current(ctx, u, id)
-			if err != nil {
-				return nil, err
-			}
-			return editStep(cur, ""), nil
+	if goesBack(path[0], value) {
+		cur, err := s.App.Current(ctx, u, id)
+		if err != nil {
+			return nil, err
 		}
+		return editStep(cur, ""), nil
 	}
 	switch path[0] {
 	case "main":
@@ -224,6 +221,23 @@ func (s *Server) advance(ctx context.Context, u *store.User, id string, path []s
 	return nil, &app.UserError{Status: http.StatusNotFound, Message: "快捷指令和服务端版本不匹配，请重新安装快捷指令"}
 }
 
+// goesBack reports whether answering step with value returns to the edit
+// menu. Cancelling an input dialog stops the whole shortcut, so the input
+// steps take an empty answer as going back instead, and the amount steps 0
+// too, as an amount is never 0.
+func goesBack(step, value string) bool {
+	switch step {
+	case "kind", "category", "asset", "source", "target":
+		return value == optBack
+	case "time", "text":
+		return value == ""
+	case "money", "other":
+		v, err := strconv.ParseFloat(strings.ReplaceAll(value, ",", ""), 64)
+		return value == "" || err == nil && v == 0
+	}
+	return false
+}
+
 func (s *Server) mainChoice(ctx context.Context, u *store.User, id, value string) (*Step, error) {
 	cur, err := s.App.Current(ctx, u, id)
 	if err != nil {
@@ -261,11 +275,11 @@ func (s *Server) editChoice(ctx context.Context, u *store.User, id, value string
 	}
 	kind := kindOf(cur.Kind)
 	if o := otherOption(cur); o != "" && value == o {
-		prompt := o + "，单位 " + cur.OtherCurrency
+		hint := "留空返回"
 		if cur.Other != "" {
-			prompt += "（现在是 " + cur.Other + "）"
+			hint = "现在是 " + cur.Other + "，" + hint
 		}
-		return &Step{Action: "number", Prompt: prompt, Next: flowPath(id, "other")}, nil
+		return &Step{Action: "number", Prompt: o + "，单位 " + cur.OtherCurrency + "（" + hint + "）", Next: flowPath(id, "other")}, nil
 	}
 	switch value {
 	case optAsset:
@@ -289,11 +303,11 @@ func (s *Server) editChoice(ctx context.Context, u *store.User, id, value string
 		}
 		return s.pickCategory(ctx, u, id, kind)
 	case optMoney:
-		return &Step{Action: "number", Prompt: "金额（现在是 " + strings.TrimSpace(cur.Money+" "+cur.Currency) + "）", Next: flowPath(id, "money")}, nil
+		return &Step{Action: "number", Prompt: "金额（现在是 " + strings.TrimSpace(cur.Money+" "+cur.Currency) + "，留空返回）", Next: flowPath(id, "money")}, nil
 	case optTime:
-		return &Step{Action: "text", Prompt: "时间，格式如 " + cur.Time, Default: cur.Time, Next: flowPath(id, "time")}, nil
+		return &Step{Action: "text", Prompt: "时间，格式如 " + cur.Time + "（清空返回）", Default: cur.Time, Next: flowPath(id, "time")}, nil
 	case optText:
-		return &Step{Action: "text", Prompt: "怎么改？例如：改成打车，用支付宝，昨天的", Next: flowPath(id, "text")}, nil
+		return &Step{Action: "text", Prompt: "怎么改？例如：改成打车，用支付宝，昨天的（留空返回）", Next: flowPath(id, "text")}, nil
 	case optRefresh:
 		info, err := s.App.RefreshCatalog(ctx, u)
 		if err != nil {
