@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"ledger-snap/internal/config"
+	"ledger-snap/internal/ocr"
 	"ledger-snap/internal/qianji"
 	"ledger-snap/internal/recognize"
 )
@@ -46,6 +47,7 @@ func runEval(ctx context.Context, args []string) error {
 	cfgPath := fs.String("config", "config.toml", "配置文件")
 	labelsPath := fs.String("labels", "testdata/screens/labels.json", "标注文件，图片路径相对于它所在的目录")
 	out := fs.String("out", "", "把每张截图的完整识别过程写到这个目录")
+	ocrCache := fs.String("ocr-cache", "", "OCR 结果缓存目录：有缓存就直接用，没有就识别后存进去；对比决策模型时 OCR 只跑一次")
 	var o overrides
 	o.register(fs)
 	_ = fs.Parse(args)
@@ -74,8 +76,11 @@ func runEval(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if *out != "" {
-		if err := os.MkdirAll(*out, 0o700); err != nil {
+	for _, dir := range []string{*out, *ocrCache} {
+		if dir == "" {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
 	}
@@ -95,11 +100,19 @@ func runEval(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		draft, trace, err := rec.Recognize(ctx, recognize.Input{Image: image, UploadTime: upload, Catalog: catalog})
+		lines, took, err := cachedOCR(ctx, rec.OCR, *ocrCache, name, image)
 		if err != nil {
 			fmt.Printf("✗ %s 失败：%v\n", name, err)
 			continue
 		}
+		draft, trace, err := rec.Recognize(ctx, recognize.Input{Image: image, UploadTime: upload, Catalog: catalog, Lines: lines})
+		if err != nil {
+			fmt.Printf("✗ %s 失败：%v\n", name, err)
+			continue
+		}
+		// OCR that ran for the cache did not run in Recognize; count it there.
+		trace.OCRMs += took.Milliseconds()
+		trace.TotalMs += took.Milliseconds()
 		totals = append(totals, trace.TotalMs)
 		cost += trace.Cost
 		if trace.FallbackWhy != "" {
@@ -143,6 +156,32 @@ func runEval(ctx context.Context, args []string) error {
 		fmt.Printf("耗时 p50=%dms p95=%dms；走兜底 %d/%d；总费用 $%.5f\n", totals[n/2], totals[min(n-1, n*95/100)], fallbacks, n, cost)
 	}
 	return nil
+}
+
+// cachedOCR returns the cached OCR lines of an image, running OCR and caching
+// them on a miss, and how long OCR took (0 on a hit). It runs OCR the way
+// Recognize does, retrying when rate limited. An empty dir means no cache:
+// nil lets Recognize run OCR.
+func cachedOCR(ctx context.Context, engine ocr.Engine, dir, name string, image []byte) ([]ocr.Line, time.Duration, error) {
+	if dir == "" {
+		return nil, 0, nil
+	}
+	path := filepath.Join(dir, engine.Name()+"_"+strings.TrimSuffix(name, filepath.Ext(name))+".json")
+	if data, err := os.ReadFile(path); err == nil {
+		var lines []ocr.Line
+		if err := json.Unmarshal(data, &lines); err != nil {
+			return nil, 0, fmt.Errorf("OCR 缓存 %s: %w", path, err)
+		}
+		return lines, 0, nil
+	}
+	lines, took, err := ocr.Timed(ctx, engine, image)
+	if err != nil {
+		return nil, took, err
+	}
+	if lines == nil {
+		lines = []ocr.Line{} // nil would make Recognize run OCR again
+	}
+	return lines, took, writeJSON(path, lines)
 }
 
 func field(l label, name string) string {
