@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -43,8 +44,17 @@ type Service struct {
 	Qianji     *qianji.Client
 	Recognizer *recognize.Recognizer
 	Invites    []string
+	Log        *slog.Logger // nil means slog.Default()
 
 	locks sync.Map // uid -> *sync.Mutex
+	syncs sync.Map // uid -> *billSync
+}
+
+func (s *Service) log() *slog.Logger {
+	if s.Log != nil {
+		return s.Log
+	}
+	return slog.Default()
 }
 
 func (s *Service) lock(uid string) func() {
@@ -67,8 +77,8 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// Login checks the invite code, logs into Qianji, loads the catalog and
-// returns a new service token.
+// Login checks the invite code, logs into Qianji, loads the catalog, starts
+// syncing the bills in the background and returns a new service token.
 func (s *Service) Login(ctx context.Context, account, passwordMD5, invite string) (string, error) {
 	account, passwordMD5 = strings.TrimSpace(account), strings.ToLower(strings.TrimSpace(passwordMD5))
 	if account == "" || len(passwordMD5) != 32 {
@@ -103,6 +113,7 @@ func (s *Service) Login(ctx context.Context, account, passwordMD5, invite string
 	if err := s.Store.AddToken(ctx, hashToken(token), u.UID, time.Now().Unix()); err != nil {
 		return "", err
 	}
+	s.syncSoon(u.UID)
 	return token, nil
 }
 
@@ -219,6 +230,8 @@ func (s *Service) result(rec *store.Record, d *recognize.Draft, c qianji.Catalog
 
 func (s *Service) Recognize(ctx context.Context, u *store.User, image []byte, upload time.Time) (*Result, error) {
 	defer s.lock(u.UID)()
+	// For the next recognition and edit; this one uses the cache as it is.
+	s.syncSoon(u.UID)
 	catalog, err := s.catalog(ctx, u)
 	if err != nil {
 		return nil, err
@@ -244,7 +257,7 @@ func (s *Service) Recognize(ctx context.Context, u *store.User, image []byte, up
 		return nil, err
 	}
 	rec.Trace = toJSON(trace)
-	return s.settle(ctx, u, rec, draft, catalog, modeNew)
+	return s.settle(ctx, u, rec, nil, draft, catalog, modeNew)
 }
 
 // recheckAfter is how old the catalog must be before an unmatched draft
@@ -308,8 +321,9 @@ const (
 
 var fieldNames = map[string]string{"category": "分类", "asset": "账户", "target_asset": "转入账户", "time": "时间"}
 
-// settle writes a draft (or records why not) and stores the record.
-func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, draft *recognize.Draft, catalog qianji.Catalog, mode settleMode) (*Result, error) {
+// settle writes a draft (or records why not) and stores the record. prev is
+// the draft before an edit; see write.
+func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, prev, draft *recognize.Draft, catalog qianji.Catalog, mode settleMode) (*Result, error) {
 	rec.Draft = toJSON(draft)
 	reason := ""
 	hold := func(why string) { rec.Status, reason = "needs_confirm", why }
@@ -334,12 +348,12 @@ func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, 
 			break
 		}
 		if mode == modeNew {
-			dup, err := s.duplicate(ctx, u, draft)
+			dup, err := s.duplicate(ctx, u, draft, m, catalog)
 			if err != nil {
 				return nil, err
 			}
-			if dup != nil {
-				hold("可能重复：" + time.Unix(dup.CreatedAt, 0).In(s.Config.Location()).Format("15:04") + " 已记过「" + dup.Summary + "」")
+			if dup != "" {
+				hold("可能重复：" + dup)
 				break
 			}
 			if m.Estimated {
@@ -355,7 +369,7 @@ func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, 
 				break
 			}
 		}
-		if err := s.write(ctx, u, rec, draft, catalog); err != nil {
+		if err := s.write(ctx, u, rec, prev, draft, catalog); err != nil {
 			return nil, err
 		}
 		rec.Status = "written"
@@ -371,11 +385,15 @@ func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, 
 	return res, nil
 }
 
-func (s *Service) duplicate(ctx context.Context, u *store.User, d *recognize.Draft) (*store.Record, error) {
+// duplicate describes an earlier bill with the draft's amount and accounts
+// within the dedup window: one this service wrote, or one in the bill cache,
+// such as a bill recorded in the app. m is the draft's bill amount.
+func (s *Service) duplicate(ctx context.Context, u *store.User, d *recognize.Draft, m billMoney, c qianji.Catalog) (string, error) {
 	window := s.Config.Recognize.DedupWindow.Duration
+	loc := s.Config.Location()
 	recent, err := s.Store.WrittenSince(ctx, u.UID, time.Now().Add(-24*time.Hour).Unix())
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	for _, r := range recent {
 		var prev recognize.Draft
@@ -384,10 +402,34 @@ func (s *Service) duplicate(ctx context.Context, u *store.User, d *recognize.Dra
 		}
 		gap := prev.Time.Sub(d.Time)
 		if prev.Money == d.Money && prev.AssetID == d.AssetID && prev.TargetID == d.TargetID && prev.Kind == d.Kind && gap <= window && gap >= -window {
-			return r, nil
+			return time.Unix(r.CreatedAt, 0).In(loc).Format("15:04") + " 已记过「" + r.Summary + "」", nil
 		}
 	}
-	return nil, nil
+	bills, err := s.Store.BillsBetween(ctx, u.UID, d.Time.Add(-window).Unix(), d.Time.Add(window).Unix())
+	if err != nil {
+		return "", err
+	}
+	for _, b := range bills {
+		qb, err := parseBill(b.Raw)
+		if err != nil {
+			continue
+		}
+		prev, ok := qb.draft()
+		if !ok || prev.Kind != d.Kind || !sameAmount(qb.Money, json.Number(m.Value)) ||
+			normID(prev.AssetID) != normID(d.AssetID) || normID(prev.TargetID) != normID(d.TargetID) {
+			continue
+		}
+		return "钱迹里已有「" + Summary(prev, c, loc) + "」", nil
+	}
+	return "", nil
+}
+
+// normID treats NoID as no ID, the way bills read from Qianji do.
+func normID(id string) string {
+	if id == qianji.NoID {
+		return ""
+	}
+	return id
 }
 
 // transferProblem explains why a transfer or repayment cannot be written yet.
@@ -438,7 +480,11 @@ func isTransferType(t int) bool { return t == qianji.TypeTransfer || t == qianji
 // record, so resending after a network error cannot create a duplicate.
 // Switching between an ordinary bill and a transfer replaces the bill with a
 // new ID instead of changing its type in place.
-func (s *Service) write(ctx context.Context, u *store.User, rec *store.Record, d *recognize.Draft, catalog qianji.Catalog) error {
+//
+// For an edit of a written bill, rec.Bill is the bill as it is in Qianji and
+// prev the draft before the edit: only the fields the edit changes are
+// replaced, so what was changed in the app stays.
+func (s *Service) write(ctx context.Context, u *store.User, rec *store.Record, prev, d *recognize.Draft, catalog qianji.Catalog) error {
 	m, err := moneyOf(d, catalog)
 	if err != nil {
 		return userErr(400, "%v", err)
@@ -458,6 +504,16 @@ func (s *Service) write(ctx context.Context, u *store.User, rec *store.Record, d
 		rec.BillID = qianji.NewBillID()
 	}
 	bill := qianji.NewBill(u.UID, rec.BillID, input)
+	if prev != nil && rec.Bill != "" && deletes == nil {
+		// If the old draft no longer converts, every field counts as changed.
+		before := map[string]any{}
+		if pm, err := moneyOf(prev, catalog); err == nil {
+			before = qianji.NewBill(u.UID, rec.BillID, billInput(prev, catalog, pm))
+		}
+		if bill, err = mergeBill(rec.Bill, before, bill); err != nil {
+			return err
+		}
+	}
 	var receipt qianji.SyncReceipt
 	send := func(qs qianji.Session) (err error) {
 		receipt, err = s.Qianji.SyncBills(ctx, qs, []map[string]any{bill}, deletes)
@@ -474,6 +530,7 @@ func (s *Service) write(ctx context.Context, u *store.User, rec *store.Record, d
 		return userErr(502, "钱迹没有确认这笔账单（%+v）", receipt)
 	}
 	rec.Bill = toJSON(bill)
+	s.cacheWrite(ctx, u.UID, bill, deletes)
 	return nil
 }
 
@@ -519,7 +576,34 @@ func (s *Service) Confirm(ctx context.Context, u *store.User, id string) (*Resul
 	if err != nil {
 		return nil, err
 	}
-	return s.settle(ctx, u, rec, d, catalog, modeConfirm)
+	return s.settle(ctx, u, rec, nil, d, catalog, modeConfirm)
+}
+
+// latest waits for a sync and brings a written record up to date with its
+// bill in Qianji: rec.Bill becomes that bill, and the returned draft carries
+// what was changed in the app. An edit then builds on both.
+func (s *Service) latest(ctx context.Context, u *store.User, rec *store.Record, d *recognize.Draft) (*recognize.Draft, error) {
+	if err := s.waitSync(ctx, u.UID); err != nil {
+		return nil, err
+	}
+	b, err := s.Store.Bill(ctx, u.UID, rec.BillID)
+	if errors.Is(err, store.ErrNotFound) {
+		// The sync succeeded, so the cache holds every bill Qianji has.
+		rec.Status = "deleted"
+		if err := s.Store.SaveRecord(ctx, rec); err != nil {
+			return nil, err
+		}
+		return nil, userErr(409, "这笔账已经在钱迹里删掉了")
+	}
+	if err != nil {
+		return nil, err
+	}
+	next, err := reconcile(d, rec.Bill, b.Raw)
+	if err != nil {
+		return nil, err
+	}
+	rec.Bill = b.Raw
+	return next, nil
 }
 
 // Correct applies a free-text correction, rewrites the bill and learns from it.
@@ -538,6 +622,11 @@ func (s *Service) Correct(ctx context.Context, u *store.User, id, text string) (
 	catalog, err := s.catalog(ctx, u)
 	if err != nil {
 		return nil, err
+	}
+	if rec.Status == "written" {
+		if d, err = s.latest(ctx, u, rec, d); err != nil {
+			return nil, err
+		}
 	}
 	next, _, err := s.Recognizer.Correct(ctx, d, catalog, text, time.Now())
 	if err != nil {
@@ -579,9 +668,11 @@ func (s *Service) Delete(ctx context.Context, u *store.User, id string) (*Result
 		if err != nil {
 			return nil, userErr(502, "从钱迹删除失败：%v", err)
 		}
-		if !receipt.Accepted(nil, nil, []string{rec.BillID}) {
+		if !receipt.Accepted(nil, nil, []string{rec.BillID}) && !s.goneFromQianji(ctx, u.UID, rec.BillID) {
 			return nil, userErr(502, "钱迹没有确认删除（%+v）", receipt)
 		}
+		s.cacheWrite(ctx, u.UID, nil, []string{rec.BillID})
+		s.syncSoon(u.UID)
 		rec.Status = "deleted"
 	case "deleted", "discarded":
 	default:
@@ -591,6 +682,18 @@ func (s *Service) Delete(ctx context.Context, u *store.User, id string) (*Result
 		return nil, err
 	}
 	return &Result{RecordID: rec.ID, Status: rec.Status, Summary: "已撤销"}, nil
+}
+
+// goneFromQianji reports a bill that a sync found deleted, e.g. in the app.
+// Every bill this service writes goes into the cache, so once the first sync
+// is done, a bill missing from it is not in Qianji either.
+func (s *Service) goneFromQianji(ctx context.Context, uid, id string) bool {
+	st, err := s.Store.SyncState(ctx, uid)
+	if err != nil || !st.Initialized() {
+		return false
+	}
+	_, err = s.Store.Bill(ctx, uid, id)
+	return errors.Is(err, store.ErrNotFound)
 }
 
 func (s *Service) saveImage(uid, id string, image []byte) (string, error) {
@@ -842,6 +945,11 @@ func (s *Service) Update(ctx context.Context, u *store.User, id string, p Patch)
 	if err != nil {
 		return nil, err
 	}
+	if rec.Status == "written" {
+		if d, err = s.latest(ctx, u, rec, d); err != nil {
+			return nil, err
+		}
+	}
 	next, err := s.applyPatch(d, p, catalog)
 	var ue *UserError
 	if errors.As(err, &ue) && ue.Status == http.StatusNotFound {
@@ -874,7 +982,7 @@ func (s *Service) commitEdit(ctx context.Context, u *store.User, rec *store.Reco
 		}
 	}
 	s.learn(ctx, u, rec, before, after)
-	return s.settle(ctx, u, rec, after, catalog, modeEdit)
+	return s.settle(ctx, u, rec, before, after, catalog, modeEdit)
 }
 
 // CatalogInfo reports a refreshed catalog.

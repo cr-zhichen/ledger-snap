@@ -20,6 +20,8 @@ device_brand = "LedgerSnap"
 device_name = "LedgerSnap"
 # 分类、资产目录超过这个时长就重新拉取；识别时没认出账户或分类，也会提前拉取一次
 catalog_ttl = "6h"
+# 修改已记的账之前，先从钱迹同步账单，免得覆盖在 App 里做的改动；最多等这么久，超时就不改
+sync_wait = "5s"
 
 [ocr]
 # volcano | google | baidu

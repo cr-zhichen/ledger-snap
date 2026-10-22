@@ -62,6 +62,7 @@ func runServe(ctx context.Context, args []string) error {
 	}
 	defer svc.Store.Close()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	svc.Log = log
 	if len(svc.Invites) == 0 {
 		log.Warn("没有配置邀请码，任何人都无法登录", "env", cfg.Server.InviteCodesEnv)
 	}

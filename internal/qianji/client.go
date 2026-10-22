@@ -1,5 +1,5 @@
 // Package qianji is a minimal client for the unofficial Qianji app API: login,
-// catalogs and bill writes through the sync channel.
+// catalogs, and bill reads and writes through the sync channel.
 package qianji
 
 import (

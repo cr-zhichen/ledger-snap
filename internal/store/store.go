@@ -1,5 +1,5 @@
-// Package store keeps users, sessions, catalogs, recognition records and
-// learned rules in one SQLite database.
+// Package store keeps users, sessions, catalogs, a cache of Qianji bills,
+// recognition records and learned rules in one SQLite database.
 package store
 
 import (
@@ -62,6 +62,20 @@ CREATE TABLE IF NOT EXISTS merchant_rules (
 	hits        INTEGER NOT NULL DEFAULT 0,
 	updated_at  INTEGER NOT NULL,
 	PRIMARY KEY (uid, merchant)
+);
+CREATE TABLE IF NOT EXISTS bills (
+	uid         TEXT NOT NULL,
+	id          TEXT NOT NULL,
+	occurred_at INTEGER NOT NULL,
+	raw         TEXT NOT NULL,
+	PRIMARY KEY (uid, id)
+);
+CREATE INDEX IF NOT EXISTS bills_uid_time ON bills(uid, occurred_at);
+CREATE TABLE IF NOT EXISTS bill_sync (
+	uid       TEXT PRIMARY KEY,
+	revision  INTEGER NOT NULL,
+	lasttimes TEXT NOT NULL DEFAULT '',
+	synced_at INTEGER NOT NULL DEFAULT 0
 );`
 
 func Open(path string) (*Store, error) {
@@ -109,6 +123,27 @@ func scanUser(row interface{ Scan(...any) error }) (*User, error) {
 
 func (s *Store) UserByAccount(ctx context.Context, account string) (*User, error) {
 	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users WHERE account = ?`, account))
+}
+
+func (s *Store) User(ctx context.Context, uid string) (*User, error) {
+	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users WHERE uid = ?`, uid))
+}
+
+func (s *Store) Users(ctx context.Context) ([]*User, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+userColumns+` FROM users ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) UserByToken(ctx context.Context, hash string) (*User, error) {

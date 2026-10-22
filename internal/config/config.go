@@ -56,6 +56,9 @@ type Qianji struct {
 	DeviceBrand string   `toml:"device_brand"`
 	DeviceName  string   `toml:"device_name"`
 	CatalogTTL  Duration `toml:"catalog_ttl"`
+	// SyncWait is how long an edit of a written bill waits for the bill sync
+	// before giving up.
+	SyncWait Duration `toml:"sync_wait"`
 }
 
 type OCR struct {
@@ -172,6 +175,9 @@ func Load(path string) (*Config, error) {
 	}
 	if _, err := time.LoadLocation(c.Recognize.Timezone); err != nil {
 		return nil, fmt.Errorf("recognize.timezone 无效: %w", err)
+	}
+	if c.Qianji.SyncWait.Duration <= 0 {
+		return nil, fmt.Errorf("qianji.sync_wait 必须大于 0")
 	}
 	return &c, nil
 }
