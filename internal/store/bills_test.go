@@ -113,3 +113,32 @@ func TestBillsBetween(t *testing.T) {
 		t.Fatalf("count = %d, %v", n, err)
 	}
 }
+
+func TestBillsByRemark(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t)
+	st, _ := s.SyncState(ctx, "u1")
+	bills := []Bill{
+		{ID: "1", Time: 10, Raw: `{"remark":"美团"}`},
+		{ID: "2", Time: 20, Raw: `{"remark":"美团"}`},
+		{ID: "3", Time: 30, Raw: `{"remark":"美团"}`},
+		{ID: "4", Time: 40, Raw: `{"remark":"美团外卖"}`},
+		{ID: "5", Time: 50, Raw: `{"remark":"肯德基"}`},
+		{ID: "6", Time: 60, Raw: `{"money":1}`},
+		{ID: "7", Time: 70, Raw: `{"remark":"美团"`},
+	}
+	if err := s.ApplySync(ctx, "u1", st, `{}`, bills, nil, true, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.BillsByRemark(ctx, "u1", []string{"美团", "肯德基", "星巴克"}, 15, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Newest first, only since 15, at most one each, exact remark only.
+	if len(got) != 2 || len(got["美团"]) != 1 || got["美团"][0].ID != "3" || len(got["肯德基"]) != 1 {
+		t.Fatalf("got %+v", got)
+	}
+	if got, err := s.BillsByRemark(ctx, "u1", nil, 0, 5); err != nil || len(got) != 0 {
+		t.Fatalf("no remarks: %+v, %v", got, err)
+	}
+}

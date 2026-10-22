@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 )
 
 // Bill is a cached Qianji bill.
@@ -130,6 +131,39 @@ func (s *Store) BillsBetween(ctx context.Context, uid string, from, to int64) ([
 			return nil, err
 		}
 		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// BillsByRemark lists, for each remark, the newest cached bills with exactly
+// that remark that happened since a time, at most limit each.
+func (s *Store) BillsByRemark(ctx context.Context, uid string, remarks []string, since int64, limit int) (map[string][]Bill, error) {
+	out := map[string][]Bill{}
+	if len(remarks) == 0 {
+		return out, nil
+	}
+	args := []any{uid, since}
+	for _, r := range remarks {
+		args = append(args, r)
+	}
+	// A bill that is not valid JSON has no remark rather than failing the query.
+	rows, err := s.db.QueryContext(ctx, `SELECT remark, id, occurred_at, raw FROM (
+			SELECT CASE WHEN json_valid(raw) THEN json_extract(raw, '$.remark') END AS remark, id, occurred_at, raw
+			FROM bills WHERE uid = ? AND occurred_at >= ?)
+		WHERE remark IN (?`+strings.Repeat(", ?", len(remarks)-1)+`) ORDER BY occurred_at DESC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var remark string
+		var b Bill
+		if err := rows.Scan(&remark, &b.ID, &b.Time, &b.Raw); err != nil {
+			return nil, err
+		}
+		if len(out[remark]) < limit {
+			out[remark] = append(out[remark], b)
+		}
 	}
 	return out, rows.Err()
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -141,6 +142,38 @@ func (b qjBill) draft() (*recognize.Draft, bool) {
 	}
 	b.setMoney(d)
 	return d, true
+}
+
+const (
+	// historyWindow and historySize bound the earlier bills of a merchant
+	// that recognition sees.
+	historyWindow = 365 * 24 * time.Hour
+	historySize   = 10
+)
+
+// history finds the user's recent expenses and income whose remark is the
+// merchant's name, which is what this service writes as the remark. It
+// reads the bill cache, so it sees categories changed in the app too.
+func (s *Service) history(ctx context.Context, uid string, merchants []string, now time.Time) (map[string][]recognize.PastBill, error) {
+	found, err := s.Store.BillsByRemark(ctx, uid, merchants, now.Add(-historyWindow).Unix(), historySize)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]recognize.PastBill{}
+	for name, bills := range found {
+		for _, b := range bills {
+			qb, err := parseBill(b.Raw)
+			if err != nil {
+				continue
+			}
+			d, ok := qb.draft()
+			if !ok || d.Kind.IsTransfer() || d.CategoryID == "" {
+				continue
+			}
+			out[name] = append(out[name], recognize.PastBill{Time: d.Time, Kind: d.Kind, Money: d.Money, Currency: d.Currency, CategoryID: d.CategoryID, AssetID: d.AssetID})
+		}
+	}
+	return out, nil
 }
 
 // reconcile carries what was changed in the app over to a written record's

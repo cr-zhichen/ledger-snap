@@ -5,6 +5,7 @@ package recognize
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -67,11 +68,23 @@ func (d *Draft) mark(field string) {
 	}
 }
 
-// Memory holds learned rules: payment text to asset, merchant to category.
+// Memory holds learned rules: payment text to asset.
 type Memory struct {
-	AssetAliases  map[string]string
-	MerchantRules map[string]string
+	AssetAliases map[string]string
 }
+
+// PastBill is one of the user's earlier bills with a merchant.
+type PastBill struct {
+	Time       time.Time `json:"time"`
+	Kind       Kind      `json:"kind"` // KindExpense or KindIncome
+	Money      string    `json:"money"`
+	Currency   string    `json:"currency,omitempty"` // "" is the account's
+	CategoryID string    `json:"category_id"`
+	AssetID    string    `json:"asset_id,omitempty"`
+}
+
+// History looks up the user's recent bills with each merchant, newest first.
+type History func(ctx context.Context, merchants []string) (map[string][]PastBill, error)
 
 // Trace records everything needed to replay or debug one recognition.
 type Trace struct {
@@ -90,6 +103,9 @@ type Trace struct {
 	FallbackError string                        `json:"fallback_error,omitempty"`
 	FallbackWhy   string                        `json:"fallback_why,omitempty"`
 	MemoryHits    []string                      `json:"memory_hits,omitempty"`
+	// History is the earlier bills shown to the models, by merchant.
+	History      map[string][]PastBill `json:"history,omitempty"`
+	HistoryError string                `json:"history_error,omitempty"`
 	// CatalogRefresh notes a catalog refresh after the first try matched no
 	// account or category, and what came of it.
 	CatalogRefresh string `json:"catalog_refresh,omitempty"`
@@ -118,8 +134,13 @@ type Input struct {
 	UploadTime time.Time
 	Catalog    qianji.Catalog
 	Memory     Memory
+	// History finds earlier bills of the merchants a screenshot may show;
+	// nil means none.
+	History History
 	// Lines reuses an earlier OCR result of the same image; nil runs OCR.
 	Lines []ocr.Line
+
+	past map[string][]PastBill // what History found for this screenshot
 }
 
 func (r *Recognizer) Recognize(ctx context.Context, in Input) (*Draft, *Trace, error) {
@@ -152,6 +173,13 @@ func (r *Recognizer) Recognize(ctx context.Context, in Input) (*Draft, *Trace, e
 	if len(rows) == 0 {
 		return reject("截图里没有识别到文字"), trace, nil
 	}
+	var names []string
+	for _, row := range limit(rows, cfg.Decision.MaxCandidates) {
+		if name := merchantName(row.Text); name != "" && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	in.past = r.lookupHistory(ctx, in, names, trace)
 
 	var small []byte
 	if cfg.Decision.SendImage || cfg.Fallback.Enabled {
@@ -194,13 +222,71 @@ func (r *Recognizer) Recognize(ctx context.Context, in Input) (*Draft, *Trace, e
 		// already shows transfers as "A->B".
 		draft.Merchant = ""
 	}
-	r.applyMemory(draft, rows, in, trace)
+	past := in.past[draft.Merchant]
+	if draft.Source == "fallback" && draft.Merchant != "" && !slices.Contains(names, draft.Merchant) {
+		// The fallback names the merchant in its own words.
+		past = r.lookupHistory(ctx, in, []string{draft.Merchant}, trace)[draft.Merchant]
+	}
+	r.applyMemory(draft, rows, in, past, trace)
 	r.finishTime(draft, in)
 	finishCurrency(draft, in.Catalog)
 	return draft, trace, nil
 }
 
 func reject(reason string) *Draft { return &Draft{Status: "rejected", Reason: reason, Kind: KindNone} }
+
+// lookupHistory finds the earlier bills of the given merchants and notes them
+// in the trace. A failed lookup only means no history.
+func (r *Recognizer) lookupHistory(ctx context.Context, in Input, names []string, trace *Trace) map[string][]PastBill {
+	if in.History == nil || len(names) == 0 {
+		return nil
+	}
+	found, err := in.History(ctx, names)
+	if err != nil {
+		trace.HistoryError = err.Error()
+		return nil
+	}
+	maps.DeleteFunc(found, func(_ string, past []PastBill) bool { return len(past) == 0 })
+	if len(found) > 0 {
+		if trace.History == nil {
+			trace.History = map[string][]PastBill{}
+		}
+		maps.Copy(trace.History, found)
+	}
+	return found
+}
+
+var weekdays = [...]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
+
+// historyText shows the earlier bills to the models, so they can follow the
+// user's habits, which may depend on the time, the amount or what was bought.
+func (r *Recognizer) historyText(past map[string][]PastBill, c qianji.Catalog) string {
+	if len(past) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("用户以前和截图里可能的交易对方记过的账，新的在前。选分类时以用户自己的习惯为准，优先于一般常识：同一个交易对方可能因为时间段、金额或买的东西不同而记到不同分类，找出和这笔最接近的几笔，记到它们的分类。\n")
+	for _, name := range slices.Sorted(maps.Keys(past)) {
+		fmt.Fprintf(&b, "「%s」\n", name)
+		for _, p := range past[name] {
+			t := p.Time.In(r.Config.Location())
+			amount := p.Money
+			if p.Currency != "" {
+				amount += " " + p.Currency
+			}
+			category := "未分类"
+			if cat, ok := c.Category(p.CategoryID); ok {
+				category = cat.Path
+			}
+			account := ""
+			if a, ok := c.Asset(p.AssetID); ok {
+				account = " · " + AssetLabel(a)
+			}
+			fmt.Fprintf(&b, "- %s %s %s · %s %s%s → %s\n", t.Format("2006-01-02"), weekdays[t.Weekday()], t.Format("15:04"), p.Kind.Label(), amount, account, category)
+		}
+	}
+	return b.String()
+}
 
 const intro = "这是用户在手机上截取的一张屏幕截图，可能是支付成功页、待支付或确认付款页、账单详情、收款或转账页面，也可能与交易无关。"
 
@@ -211,6 +297,9 @@ func (r *Recognizer) state(rows []Row, in Input, image []byte) []any {
 	}
 	state = append(state, "截图中 OCR 识别出的文字，从上到下：\n"+rowsText(rows))
 	state = append(state, "用户上传截图的时间（北京时间）："+in.UploadTime.In(r.Config.Location()).Format("2006-01-02 15:04"))
+	if h := r.historyText(in.past, in.Catalog); h != "" {
+		state = append(state, h)
+	}
 	return state
 }
 
@@ -284,7 +373,11 @@ func (r *Recognizer) buildQuestions(rows []Row, trace *Trace, in Input) question
 			opts = append(opts, openrouter.Option{Key: key, Description: c.Path})
 		}
 		if len(opts) > 0 {
-			qs.questions[name] = openrouter.ChoiceQuestion("如果这是一笔"+what+"，记到哪个分类最合适？", opts)
+			instructions := "如果这是一笔" + what + "，记到哪个分类最合适？"
+			if len(in.past) > 0 {
+				instructions += "用户以前和同一交易对方记过账时，以用户的习惯为准：看时间段、金额和这笔最接近的那几笔记到了哪个分类。"
+			}
+			qs.questions[name] = openrouter.ChoiceQuestion(instructions, opts)
 		}
 	}
 	if len(in.Catalog.Assets) > 0 {
@@ -466,8 +559,10 @@ func merchantName(row string) string {
 	return strings.TrimSpace(row)
 }
 
-// applyMemory overrides model choices with what the user taught us before.
-func (r *Recognizer) applyMemory(d *Draft, rows []Row, in Input, trace *Trace) {
+// applyMemory overrides model choices with what the user did before: the
+// account their payment text was corrected to, and the category of the
+// merchant's earlier bills when those agree (see historyCategory).
+func (r *Recognizer) applyMemory(d *Draft, rows []Row, in Input, past []PastBill, trace *Trace) {
 	if d.Status != "ok" || (d.Kind != KindExpense && d.Kind != KindIncome) {
 		return
 	}
@@ -478,13 +573,39 @@ func (r *Recognizer) applyMemory(d *Draft, rows []Row, in Input, trace *Trace) {
 			d.Uncertain = remove(d.Uncertain, "asset")
 		}
 	}
-	if id, ok := in.Memory.MerchantRules[d.Merchant]; ok && d.Merchant != "" {
+	if id, ok := historyCategory(past, d.Kind); ok {
 		if c, exists := in.Catalog.Category(id); exists && c.Type == kindType(d.Kind) {
 			d.CategoryID = id
 			trace.MemoryHits = append(trace.MemoryHits, "category")
 			d.Uncertain = remove(d.Uncertain, "category")
 		}
 	}
+}
+
+// historyRecent is how many of a merchant's latest bills of one kind
+// historyCategory looks at.
+const historyRecent = 5
+
+// historyCategory returns the category of the merchant's latest bills of the
+// kind when there are at least two and they all have it. Otherwise the model
+// decides, with the history in front of it: one bill may have been
+// categorized wrongly and never corrected.
+func historyCategory(past []PastBill, kind Kind) (string, bool) {
+	var ids []string
+	for _, p := range past {
+		if p.Kind == kind && len(ids) < historyRecent {
+			ids = append(ids, p.CategoryID)
+		}
+	}
+	if len(ids) < 2 || ids[0] == "" {
+		return "", false
+	}
+	for _, id := range ids[1:] {
+		if id != ids[0] {
+			return "", false
+		}
+	}
+	return ids[0], true
 }
 
 // AssetLabel names an asset with its remark, e.g. "工行卡（储蓄卡 尾号5678）".

@@ -1,12 +1,15 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"ledger-snap/internal/recognize"
+	"ledger-snap/internal/store"
 )
 
 func TestReconcile(t *testing.T) {
@@ -61,6 +64,43 @@ func TestReconcile(t *testing.T) {
 			t.Fatal("want an error")
 		}
 	})
+}
+
+func TestHistory(t *testing.T) {
+	s, u, _ := newTestService(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.Local)
+	day := int64(24 * 3600)
+	bill := func(id string, daysAgo int64, body string) store.Bill {
+		at := now.Unix() - daysAgo*day
+		return store.Bill{ID: id, Time: at, Raw: fmt.Sprintf(`{"id":%s,"time":%d,%s}`, id, at, body)}
+	}
+	bills := []store.Bill{
+		bill("1", 1, `"type":0,"money":28,"remark":"美团","cateid":101,"assetid":201`),
+		bill("2", 2, `"type":1,"money":5,"remark":"美团","cateid":103,"assetid":201`),
+		bill("3", 3, `"type":2,"money":50,"remark":"美团","fromid":201,"targetid":202`),
+		bill("4", 400, `"type":0,"money":9,"remark":"美团","cateid":102,"assetid":201`),
+		bill("5", 1, `"type":0,"money":9,"remark":"美团外卖","cateid":102,"assetid":201`),
+		bill("6", 4, `"type":0,"money":12.99,"remark":"美团","cateid":102,"assetid":201,"extra":{"curr":{"ss":"USD","sv":12.99,"ts":"CNY","tv":93.5}}`),
+	}
+	st, _ := s.Store.SyncState(ctx, u.UID)
+	if err := s.Store.ApplySync(ctx, u.UID, st, `{}`, bills, nil, true, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.history(ctx, u.UID, []string{"美团", "肯德基"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Newest first; the transfer, the bill from over a year ago and the
+	// other remark are left out.
+	want := []recognize.PastBill{
+		{Time: time.Unix(now.Unix()-day, 0), Kind: recognize.KindExpense, Money: "28.00", CategoryID: "101", AssetID: "201"},
+		{Time: time.Unix(now.Unix()-2*day, 0), Kind: recognize.KindIncome, Money: "5.00", CategoryID: "103", AssetID: "201"},
+		{Time: time.Unix(now.Unix()-4*day, 0), Kind: recognize.KindExpense, Money: "12.99", Currency: "USD", CategoryID: "102", AssetID: "201"},
+	}
+	if len(got) != 1 || !slices.Equal(got["美团"], want) {
+		t.Fatalf("got %+v", got)
+	}
 }
 
 func TestMergeBill(t *testing.T) {

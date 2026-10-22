@@ -90,6 +90,9 @@ func (r *Recognizer) fallback(ctx context.Context, rows []Row, in Input, image [
 	trace.FallbackModel = cfg.Model
 	text := fmt.Sprintf("%s\n\nOCR 文字（从上到下）：\n%s\n上传时间（北京时间）：%s\n\n%s",
 		fallbackInstructions, rowsText(rows), in.UploadTime.In(r.Config.Location()).Format("2006-01-02 15:04:05"), catalogText(in.Catalog))
+	if h := r.historyText(in.past, in.Catalog); h != "" {
+		text += "\n" + h
+	}
 	content := []any{map[string]any{"type": "text", "text": text}}
 	if image != nil {
 		content = append(content, openrouter.ImagePart(image))

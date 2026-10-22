@@ -242,7 +242,10 @@ func (s *Service) Recognize(ctx context.Context, u *store.User, image []byte, up
 	}
 	input := recognize.Input{
 		Image: image, UploadTime: upload, Catalog: catalog,
-		Memory: recognize.Memory{AssetAliases: mem.AssetAliases, MerchantRules: mem.MerchantRules},
+		Memory: recognize.Memory{AssetAliases: mem.AssetAliases},
+		History: func(ctx context.Context, merchants []string) (map[string][]recognize.PastBill, error) {
+			return s.history(ctx, u.UID, merchants, upload)
+		},
 	}
 	draft, trace, err := s.Recognizer.Recognize(ctx, input)
 	if err != nil {
@@ -635,17 +638,15 @@ func (s *Service) Correct(ctx context.Context, u *store.User, id, text string) (
 	return s.commitEdit(ctx, u, rec, d, next, catalog)
 }
 
-// learn stores merchant and payment-method rules from a correction.
+// learn stores a payment-method rule from a correction of the account. A
+// corrected category needs no rule: the bill itself becomes the merchant's
+// history.
 func (s *Service) learn(ctx context.Context, u *store.User, rec *store.Record, before, after *recognize.Draft) {
-	now := time.Now().Unix()
-	if after.CategoryID != before.CategoryID && after.Merchant != "" && after.CategoryID != "" {
-		_ = s.Store.PutMerchantRule(ctx, u.UID, after.Merchant, after.CategoryID, now)
-	}
 	if after.AssetID != before.AssetID && after.AssetID != "" && after.AssetID != qianji.NoID {
 		var trace recognize.Trace
 		if json.Unmarshal([]byte(rec.Trace), &trace) == nil {
 			if p := recognize.PaymentText(trace.OCRLines); p != "" {
-				_ = s.Store.PutAssetAlias(ctx, u.UID, p, after.AssetID, now)
+				_ = s.Store.PutAssetAlias(ctx, u.UID, p, after.AssetID, time.Now().Unix())
 			}
 		}
 	}
