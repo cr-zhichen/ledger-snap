@@ -46,6 +46,18 @@ func TestAmountsIntegerNeedsMarker(t *testing.T) {
 	}
 }
 
+func TestAmountsSkipCardNumbers(t *testing.T) {
+	got := Amounts(Rows([]ocr.Line{
+		line("付款卡 招商银行储蓄卡(5678)", 0, 100, 40),
+		line("支付方式 中信银行信用卡(尾号1234)", 0, 200, 40),
+		line("收款账号 6217 **** **** 3307", 0, 300, 40),
+		line("转账金额(元) 5000", 0, 400, 40),
+	}), 0)
+	if len(got) != 1 || got[0].Value != "5000.00" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
 func TestAmountCurrencies(t *testing.T) {
 	rows := Rows([]ocr.Line{
 		line("卖出金额", 0, 100, 40), line("3,940.45 HKD", 600, 100, 40),

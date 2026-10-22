@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"ledger-snap/internal/ocr"
 	"ledger-snap/internal/openrouter"
 	"ledger-snap/internal/qianji"
 )
@@ -259,10 +258,17 @@ var paymentLabel = regexp.MustCompile(`^(支付方式|付款方式|交易卡号|
 
 // PaymentText returns the value of the payment-method row, used as the key
 // when the user teaches which asset a payment method belongs to.
-func PaymentText(lines []ocr.Line) string {
-	for _, row := range Rows(lines) {
-		if loc := paymentLabel.FindStringIndex(row.Text); loc != nil {
-			if v := strings.TrimSpace(row.Text[loc[1]:]); v != "" {
+func (t *Trace) PaymentText() string {
+	rows := t.Rows
+	if rows == nil {
+		// Records from before the rows were kept.
+		for _, row := range Rows(t.OCRLines) {
+			rows = append(rows, row.Text)
+		}
+	}
+	for _, text := range rows {
+		if loc := paymentLabel.FindStringIndex(text); loc != nil {
+			if v := strings.TrimSpace(text[loc[1]:]); v != "" {
 				return v
 			}
 		}

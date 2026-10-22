@@ -27,6 +27,7 @@ type Config struct {
 	Server     Server     `toml:"server"`
 	Qianji     Qianji     `toml:"qianji"`
 	OCR        OCR        `toml:"ocr"`
+	Rows       Rows       `toml:"rows"`
 	OpenRouter OpenRouter `toml:"openrouter"`
 	Decision   Decision   `toml:"decision"`
 	TypeSafe   TypeSafe   `toml:"typesafe"`
@@ -95,6 +96,19 @@ type Baidu struct {
 	SecretKeyEnv string `toml:"secret_key_env"`
 }
 
+// Rows sorts OCR lines into labels and values with a fast text model, so that
+// a label and its value end up on one row even when their boxes do not line
+// up.
+type Rows struct {
+	Enabled         bool     `toml:"enabled"`
+	Model           string   `toml:"model"`
+	Provider        string   `toml:"provider"`
+	SchemaInPrompt  bool     `toml:"schema_in_prompt"`
+	ReasoningEffort string   `toml:"reasoning_effort"`
+	MaxTokens       int      `toml:"max_tokens"`
+	Timeout         Duration `toml:"timeout"`
+}
+
 type OpenRouter struct {
 	BaseURL   string   `toml:"base_url"`
 	APIKeyEnv string   `toml:"api_key_env"`
@@ -132,8 +146,13 @@ type Thresholds struct {
 }
 
 type Fallback struct {
-	Enabled         bool   `toml:"enabled"`
+	Enabled bool `toml:"enabled"`
+	// Primary skips the decision model when recognizing: the fallback model
+	// reads every screenshot. Corrections still use the decision model.
+	Primary         bool   `toml:"primary"`
 	Model           string `toml:"model"`
+	Provider        string `toml:"provider"`
+	SchemaInPrompt  bool   `toml:"schema_in_prompt"`
 	ReasoningEffort string `toml:"reasoning_effort"`
 	MaxTokens       int    `toml:"max_tokens"`
 	ImageMaxSide    int    `toml:"image_max_side"`
@@ -175,6 +194,9 @@ func Load(path string) (*Config, error) {
 	}
 	if _, err := time.LoadLocation(c.Recognize.Timezone); err != nil {
 		return nil, fmt.Errorf("recognize.timezone 无效: %w", err)
+	}
+	if c.Fallback.Primary && !c.Fallback.Enabled {
+		return nil, fmt.Errorf("fallback.primary 要求 fallback.enabled = true")
 	}
 	if c.Qianji.SyncWait.Duration <= 0 {
 		return nil, fmt.Errorf("qianji.sync_wait 必须大于 0")

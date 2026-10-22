@@ -89,11 +89,15 @@ func runEval(ctx context.Context, args []string) error {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	fmt.Printf("OCR=%s 决策=%s 兜底=%s（启用=%v）\n\n", cfg.OCR.Provider, cfg.Decision.Model, cfg.Fallback.Model, cfg.Fallback.Enabled)
+	rows := "按位置"
+	if cfg.Rows.Enabled {
+		rows = cfg.Rows.Model
+	}
+	fmt.Printf("OCR=%s 分行=%s 决策=%s 兜底=%s（启用=%v）\n\n", cfg.OCR.Provider, rows, cfg.Decision.Model, cfg.Fallback.Model, cfg.Fallback.Enabled)
 	fields := []string{"status", "kind", "money", "currency", "converted", "discount", "fee", "category", "asset", "target_asset", "time", "merchant"}
 	right, checked := map[string]int{}, map[string]int{}
-	var totals []int64
-	cost, fallbacks := 0.0, 0
+	var totals, rowsMs []int64
+	cost, fallbacks, rowsFailed := 0.0, 0, 0
 	for _, name := range names {
 		want := lf.Images[name]
 		image, err := os.ReadFile(filepath.Join(filepath.Dir(*labelsPath), name))
@@ -114,6 +118,12 @@ func runEval(ctx context.Context, args []string) error {
 		trace.OCRMs += took.Milliseconds()
 		trace.TotalMs += took.Milliseconds()
 		totals = append(totals, trace.TotalMs)
+		if trace.RowsModel != "" {
+			rowsMs = append(rowsMs, trace.RowsMs)
+		}
+		if trace.RowsError != "" {
+			rowsFailed++
+		}
 		cost += trace.Cost
 		if trace.FallbackWhy != "" {
 			fallbacks++
@@ -154,6 +164,10 @@ func runEval(ctx context.Context, args []string) error {
 	slices.Sort(totals)
 	if n := len(totals); n > 0 {
 		fmt.Printf("耗时 p50=%dms p95=%dms；走兜底 %d/%d；总费用 $%.5f\n", totals[n/2], totals[min(n-1, n*95/100)], fallbacks, n, cost)
+	}
+	slices.Sort(rowsMs)
+	if n := len(rowsMs); n > 0 {
+		fmt.Printf("分行 p50=%dms p95=%dms；失败 %d/%d，失败时按位置分行\n", rowsMs[n/2], rowsMs[min(n-1, n*95/100)], rowsFailed, n)
 	}
 	return nil
 }

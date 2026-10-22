@@ -13,7 +13,7 @@ GitHub 的附件名不能用中文，所以添加后快捷指令叫“ledger-sna
 ## 流程
 
 1. 快捷指令截屏，上传到服务端。
-2. 服务端调 OCR（火山多语种 OCR、谷歌或百度），从文字里列出金额和时间候选。
+2. 服务端调 OCR（火山多语种 OCR、谷歌或百度），再用一个快的文本模型（默认 Cerebras 上的 Qwen3.8 27B）把文字行整理成“标签 + 值”：标签和值不在一行、标签在值下面、值折成几行时，都合成一行。模型只给出行号，不改文字；出错或超过 `rows.timeout` 就按文字框的位置分行。然后从整理好的文字里列出金额和时间候选。
 3. 一次决策模型请求同时判断：是不是要记账的交易（已完成或待支付）、收支类型、金额及币种、时间、分类、账户、商户。外币消费和换汇按钱迹的多币种格式记账，两边金额以截图为准，截图里没有的按钱迹汇率估算并先请用户确认。默认经 OpenRouter 调用 Jev 1.14，也可以在 `config.toml` 里把 `decision.provider` 改成 `typesafe`，直接调用 TypeSafe 官方接口。
 4. 判断不准时，交给视觉 LLM 兜底（默认 Claude Haiku 5.5）。
 5. 写入钱迹，返回摘要；快捷指令弹出「完成 / 修改 / 从钱迹删除」，修改时可以直接选账户、收支类型、分类，改金额、时间，或用一句话改。有拿不准的字段时先不写入，标明“还没记账”，弹出「确认记账 / 修改 / 不记了」，等用户确认（或修改后确认）再入库。
@@ -32,7 +32,7 @@ GitHub 的附件名不能用中文，所以添加后快捷指令叫“ledger-sna
 
 | 环境变量 | 用途 |
 | --- | --- |
-| `OPENROUTER_API_KEY` | 决策模型（经 OpenRouter 时）和视觉 LLM |
+| `OPENROUTER_API_KEY` | 整理文字行的模型、决策模型（经 OpenRouter 时）和视觉 LLM |
 | `TYPESAFE_AI_API_KEY` | 决策模型直接走 TypeSafe 官方接口时 |
 | `VOLCANO_OCR_ACCESS_KEY`、`VOLCANO_OCR_SECRET_KEY` | 火山 OCR |
 | `GOOGLE_OCR_API_KEY` | 谷歌 Cloud Vision |
@@ -80,9 +80,9 @@ mise run serve
 | `ledger-snap qianji-smoke` | 测试账号登录，全量拉取账单，新增、修改、删除一笔 0.01 元账单，并确认增量拉取能拿到修改和删除 |
 | `ledger-snap seed-assets` | 在测试账号里新建一批容易混淆的账户（已存在的跳过） |
 
-测试截图在 `testdata/screens`，共 42 张：普通支付、待支付、容易混淆的账户和商户、红包和转账、自己账户之间的转账和还款、复杂界面（费用明细、电商订单、账单列表、深色模式、带广告、短信）、外币（换汇、境外消费、港元账户消费）、优惠和手续费（还款优惠、提现服务费、多项优惠）、支付失败，以及与支付无关的页面。截图由 `src/` 里的网页生成，修改后运行 `testdata/screens/render.sh` 重新生成，只重新生成某几张时把文件名跟在后面；标注在 `labels.json`。
+测试截图在 `testdata/screens`，共 50 张：普通支付、待支付、容易混淆的账户和商户、红包和转账、自己账户之间的转账和还款、复杂界面（费用明细、电商订单、账单列表、深色模式、带广告、短信）、外币（换汇、境外消费、港元账户消费）、优惠和手续费（还款优惠、提现服务费、多项优惠）、支付失败、与支付无关的页面，以及标签和值不在一行的排版（标签在值上方、两列网格、值折成两行、金额下面才是说明、日期和时刻分成两项）。截图由 `src/` 里的网页生成，修改后运行 `testdata/screens/render.sh` 重新生成，只重新生成某几张时把文件名跟在后面；标注在 `labels.json`。
 
-`recognize` 和 `eval` 支持 `--provider`、`--decision-provider`、`--decision-model`、`--fallback-model`、`--no-image`、`--no-fallback`、`--force-fallback`，可以不改配置直接对比。`eval` 还可以加 `--ocr-cache <目录>`，把每张截图的 OCR 结果存到这个目录、下次直接用，对比决策模型时 OCR 只跑一次，各模型拿到的文字也完全相同。用上缓存的截图不计 OCR 耗时；缓存按 OCR 服务和截图文件名区分，重新生成截图后要删掉对应的缓存。
+`recognize` 和 `eval` 支持 `--provider`、`--rows-model`、`--no-rows`、`--decision-provider`、`--decision-model`、`--fallback-model`、`--no-image`、`--no-fallback`、`--force-fallback`，可以不改配置直接对比。`eval` 还可以加 `--ocr-cache <目录>`，把每张截图的 OCR 结果存到这个目录、下次直接用，对比决策模型时 OCR 只跑一次，各模型拿到的文字也完全相同。用上缓存的截图不计 OCR 耗时；缓存按 OCR 服务和截图文件名区分，重新生成截图后要删掉对应的缓存。
 
 测试账号写在不提交的 `.env.local` 里：
 

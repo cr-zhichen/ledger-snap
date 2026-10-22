@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"regexp"
 	"time"
-
-	"ledger-snap/internal/openrouter"
 )
 
 // The decision model picks one amount per question, so it cannot add up a
@@ -83,19 +81,7 @@ func (r *Recognizer) startDiscountCheck(ctx context.Context, rows []Row, image [
 	cfg := r.Config.Fallback
 	ctx, cancel := context.WithCancel(ctx)
 	c := &discountCheck{cancel: cancel, done: make(chan struct{})}
-	req := openrouter.ChatRequest{
-		Model: cfg.Model,
-		Messages: []openrouter.Message{{Role: "user", Content: []any{
-			map[string]any{"type": "text", "text": discountInstructions + "\n\nOCR 文字（从上到下）：\n" + rowsText(rows)},
-			openrouter.ImagePart(image),
-		}}},
-		MaxTokens:      cfg.MaxTokens,
-		ResponseFormat: openrouter.JSONSchemaFormat("discount", discountSchema),
-		Provider:       map[string]any{"require_parameters": true},
-	}
-	if cfg.ReasoningEffort != "" {
-		req.Reasoning = map[string]any{"effort": cfg.ReasoningEffort, "exclude": true}
-	}
+	req := fallbackModel(cfg).request("discount", discountSchema, discountInstructions+"\n\nOCR 文字（从上到下）：\n"+rowsText(rows), image)
 	go func() {
 		defer close(c.done)
 		start := time.Now()

@@ -301,13 +301,13 @@ func (s *Service) recheck(ctx context.Context, u *store.User, in recognize.Input
 		tr.CatalogRefresh = "账户和分类没有变化"
 		return d, tr, fresh
 	}
-	in.Catalog, in.Lines = fresh, tr.OCRLines
+	in.Catalog, in.Lines, in.RowItems = fresh, tr.OCRLines, tr.RowItems
 	d2, tr2, err := s.Recognizer.Recognize(ctx, in)
 	if err != nil {
 		tr.CatalogRefresh = "账户和分类有更新，重新识别失败：" + err.Error()
 		return d, tr, fresh
 	}
-	tr2.OCRMs, tr2.Cost = tr.OCRMs, tr2.Cost+tr.Cost
+	tr2.OCRMs, tr2.RowsMs, tr2.Cost = tr.OCRMs, tr2.RowsMs+tr.RowsMs, tr2.Cost+tr.Cost
 	tr2.CatalogRefresh = "账户和分类有更新，已重新识别"
 	return d2, tr2, fresh
 }
@@ -649,7 +649,7 @@ func (s *Service) learn(ctx context.Context, u *store.User, rec *store.Record, b
 	if after.AssetID != before.AssetID && after.AssetID != "" && after.AssetID != qianji.NoID {
 		var trace recognize.Trace
 		if json.Unmarshal([]byte(rec.Trace), &trace) == nil {
-			if p := recognize.PaymentText(trace.OCRLines); p != "" {
+			if p := trace.PaymentText(); p != "" {
 				_ = s.Store.PutAssetAlias(ctx, u.UID, p, after.AssetID, time.Now().Unix())
 			}
 		}

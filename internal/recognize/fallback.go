@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"ledger-snap/internal/openrouter"
 	"ledger-snap/internal/qianji"
 )
 
@@ -103,20 +102,7 @@ func (r *Recognizer) fallback(ctx context.Context, rows []Row, in Input, image [
 	if h := r.historyText(in.past, in.Catalog); h != "" {
 		text += "\n" + h
 	}
-	content := []any{map[string]any{"type": "text", "text": text}}
-	if image != nil {
-		content = append(content, openrouter.ImagePart(image))
-	}
-	req := openrouter.ChatRequest{
-		Model:          cfg.Model,
-		Messages:       []openrouter.Message{{Role: "user", Content: content}},
-		MaxTokens:      cfg.MaxTokens,
-		ResponseFormat: openrouter.JSONSchemaFormat("bill", fallbackSchema),
-		Provider:       map[string]any{"require_parameters": true},
-	}
-	if cfg.ReasoningEffort != "" {
-		req.Reasoning = map[string]any{"effort": cfg.ReasoningEffort, "exclude": true}
-	}
+	req := fallbackModel(cfg).request("bill", fallbackSchema, text, image)
 	var out FallbackResult
 	start := time.Now()
 	resp, err := r.Router.ChatJSON(ctx, req, &out)

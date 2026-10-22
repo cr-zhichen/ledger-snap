@@ -48,4 +48,11 @@ func TestEnvOverrideErrors(t *testing.T) {
 			}
 		})
 	}
+	t.Run("primary fallback turned off", func(t *testing.T) {
+		t.Setenv("LEDGER_SNAP_FALLBACK_PRIMARY", "true")
+		t.Setenv("LEDGER_SNAP_FALLBACK_ENABLED", "false")
+		if _, err := Load(repoConfig); err == nil {
+			t.Fatal("fallback.primary without fallback.enabled should fail")
+		}
+	})
 }

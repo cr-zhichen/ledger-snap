@@ -56,6 +56,21 @@ endpoint = "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate"
 api_key_env = "BAIDU_OCR_API_KEY"
 secret_key_env = "BAIDU_OCR_SECRET_KEY"
 
+# OCR 之后用一个快的文本模型把文字行整理成“标签 + 值”：框高低不齐、标签在上或在下、值折成几行，
+# 都归成一行，标签在前。模型只给出行号，不改文字；关闭、出错或超时时按文字框的位置分行。
+# 2026-10-22 用 12 张截图的原样、错位、上下排三个版本对比，Qwen3.8 27B 在 Cerebras 上最快（p50 0.7 秒）
+[rows]
+enabled = true
+model = "qwen/qwen3.8-27b"
+# 只走这家服务商，留空由 OpenRouter 选
+provider = "cerebras"
+# 服务商不支持 JSON Schema 输出时设为 true，格式写进提示词（Cerebras 上的 Qwen 不支持）
+schema_in_prompt = true
+# none | minimal | low | medium | high；留空表示不传。Qwen 默认会先思考，要设 none
+reasoning_effort = "none"
+max_tokens = 2000
+timeout = "2s"
+
 [openrouter]
 base_url = "https://openrouter.ai"
 api_key_env = "OPENROUTER_API_KEY"
@@ -95,9 +110,15 @@ input_price_per_mtok = 0.042
 
 [fallback]
 enabled = true
+# 识别时不问决策模型，每张截图都直接交给这个模型；修改账单仍用决策模型
+primary = false
 # 2026-10-21 用 6 张合成截图对比：Haiku 5.5 全对且便宜；Gemini 3.8 Flash 全对但贵 3 倍、偶尔很慢；
 # DeepSeek V4.1 Flash 1017 最快，但把待支付页记成了支出
 model = "anthropic/claude-haiku-5.5"
+# 只走这家服务商，留空由 OpenRouter 选
+provider = ""
+# 服务商不支持 JSON Schema 输出时设为 true，格式写进提示词
+schema_in_prompt = false
 # none | minimal | low | medium | high
 reasoning_effort = "low"
 max_tokens = 4000

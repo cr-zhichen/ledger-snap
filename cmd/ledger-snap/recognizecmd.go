@@ -17,12 +17,14 @@ import (
 )
 
 type overrides struct {
-	provider, decisionProvider, decisionModel, fallbackModel string
-	noImage, noFallback, forceFallback                       bool
+	provider, rowsModel, decisionProvider, decisionModel, fallbackModel string
+	noRows, noImage, noFallback, forceFallback                          bool
 }
 
 func (o *overrides) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.provider, "provider", "", "覆盖 ocr.provider")
+	fs.StringVar(&o.rowsModel, "rows-model", "", "覆盖 rows.model")
+	fs.BoolVar(&o.noRows, "no-rows", false, "不用模型分行，按文字框的位置分行")
 	fs.StringVar(&o.decisionProvider, "decision-provider", "", "覆盖 decision.provider（openrouter 或 typesafe）")
 	fs.StringVar(&o.decisionModel, "decision-model", "", "覆盖 decision.model")
 	fs.StringVar(&o.fallbackModel, "fallback-model", "", "覆盖 fallback.model")
@@ -34,6 +36,12 @@ func (o *overrides) register(fs *flag.FlagSet) {
 func (o *overrides) apply(cfg *config.Config) {
 	if o.provider != "" {
 		cfg.OCR.Provider = o.provider
+	}
+	if o.rowsModel != "" {
+		cfg.Rows.Model = o.rowsModel
+	}
+	if o.noRows {
+		cfg.Rows.Enabled = false
 	}
 	if o.decisionProvider != "" {
 		cfg.Decision.Provider = o.decisionProvider
@@ -145,9 +153,12 @@ func runRecognize(ctx context.Context, args []string) error {
 			continue
 		}
 		fmt.Println(summary(draft, catalog))
-		fmt.Printf("   OCR %dms · 决策 %dms · 兜底 %dms · 合计 %dms · $%.5f", trace.OCRMs, trace.DecisionMs, trace.FallbackMs, trace.TotalMs, trace.Cost)
+		fmt.Printf("   OCR %dms · 分行 %dms · 决策 %dms · 兜底 %dms · 合计 %dms · $%.5f", trace.OCRMs, trace.RowsMs, trace.DecisionMs, trace.FallbackMs, trace.TotalMs, trace.Cost)
 		if trace.FallbackWhy != "" {
 			fmt.Printf(" · 兜底原因：%s", trace.FallbackWhy)
+		}
+		if trace.RowsError != "" {
+			fmt.Printf(" · 分行错误：%s", trace.RowsError)
 		}
 		if trace.DecisionError != "" {
 			fmt.Printf(" · 决策错误：%s", trace.DecisionError)

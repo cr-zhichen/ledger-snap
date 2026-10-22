@@ -95,9 +95,17 @@ type History func(ctx context.Context, merchants []string) (map[string][]PastBil
 
 // Trace records everything needed to replay or debug one recognition.
 type Trace struct {
-	OCRProvider   string                        `json:"ocr_provider"`
-	OCRLines      []ocr.Line                    `json:"ocr_lines"`
-	OCRMs         int64                         `json:"ocr_ms"`
+	OCRProvider string     `json:"ocr_provider"`
+	OCRLines    []ocr.Line `json:"ocr_lines"`
+	OCRMs       int64      `json:"ocr_ms"`
+	// Rows are the rows the OCR lines were grouped into, by the rows model
+	// or by position (see rows.go). RowItems are the model's labels and
+	// values, by line number after dropping the status bar.
+	Rows          []string                      `json:"rows,omitempty"`
+	RowItems      []RowItem                     `json:"row_items,omitempty"`
+	RowsModel     string                        `json:"rows_model,omitempty"`
+	RowsMs        int64                         `json:"rows_ms,omitempty"`
+	RowsError     string                        `json:"rows_error,omitempty"`
 	Amounts       []AmountCandidate             `json:"amounts"`
 	Times         []TimeCandidate               `json:"times"`
 	DecisionModel string                        `json:"decision_model"`
@@ -149,6 +157,8 @@ type Input struct {
 	History History
 	// Lines reuses an earlier OCR result of the same image; nil runs OCR.
 	Lines []ocr.Line
+	// RowItems reuses an earlier sorting of Lines into labels and values.
+	RowItems []RowItem
 
 	past map[string][]PastBill // what History found for this screenshot
 }
@@ -157,7 +167,7 @@ func (r *Recognizer) Recognize(ctx context.Context, in Input) (*Draft, *Trace, e
 	start := time.Now()
 	cfg := r.Config
 	loc := cfg.Location()
-	trace := &Trace{OCRProvider: r.OCR.Name(), DecisionModel: cfg.Decision.Provider + ":" + cfg.Decision.Model}
+	trace := &Trace{OCRProvider: r.OCR.Name()}
 	defer func() { trace.TotalMs = time.Since(start).Milliseconds() }()
 
 	lines := in.Lines
@@ -171,13 +181,14 @@ func (r *Recognizer) Recognize(ctx context.Context, in Input) (*Draft, *Trace, e
 		}
 	}
 	trace.OCRLines = lines
-	_, imageHeight, _ := imgutil.Size(in.Image)
-	var rows []Row
-	for _, row := range Rows(lines) {
-		if !statusBar(row, imageHeight) {
-			rows = append(rows, row)
+	width, height, _ := imgutil.Size(in.Image)
+	var body []ocr.Line
+	for _, l := range lines {
+		if !statusBar(l, height) {
+			body = append(body, l)
 		}
 	}
+	rows := r.rows(ctx, body, in.RowItems, width, height, trace)
 	trace.Amounts = capList(trace, "金额候选", Amounts(rows, 0), cfg.Decision.MaxCandidates)
 	trace.Times = capList(trace, "时间候选", Times(rows, in.UploadTime, loc, 0), cfg.Decision.MaxCandidates)
 	if len(rows) == 0 {
@@ -185,7 +196,7 @@ func (r *Recognizer) Recognize(ctx context.Context, in Input) (*Draft, *Trace, e
 	}
 	var names []string
 	for _, row := range limit(rows, cfg.Decision.MaxCandidates) {
-		if name := merchantName(row.Text); name != "" && !slices.Contains(names, name) {
+		if name := merchantOf(row); name != "" && !slices.Contains(names, name) {
 			names = append(names, name)
 		}
 	}
@@ -198,27 +209,10 @@ func (r *Recognizer) Recognize(ctx context.Context, in Input) (*Draft, *Trace, e
 			return nil, trace, err
 		}
 	}
-	q := r.buildQuestions(rows, trace, in)
-	var check *discountCheck
-	if cfg.Fallback.Enabled && r.Router != nil && small != nil && mayAddUpDiscounts(trace.Amounts) {
-		check = r.startDiscountCheck(ctx, rows, small)
-		defer check.cancel()
-	}
-	dStart := time.Now()
-	resp, err := r.Decider.Decide(ctx, openrouter.DecisionsRequest{Model: cfg.Decision.Model, State: r.state(rows, in, small), Questions: q.questions})
-	trace.DecisionMs = time.Since(dStart).Milliseconds()
 	var draft *Draft
-	why := ""
-	if err != nil {
-		trace.DecisionError = err.Error()
-		why = "决策模型请求失败"
-	} else {
-		trace.Decision = resp
-		trace.Cost += resp.Usage.Cost
-		draft, why = r.interpret(resp.Answers, q, trace, in, check)
-	}
-	if check != nil && trace.DiscountCheck == nil {
-		trace.DiscountCheck = &DiscountCheck{Note: "用不上，已取消"}
+	why := "识别直接交给兜底模型"
+	if !cfg.Fallback.Primary {
+		draft, why = r.decide(ctx, rows, in, small, trace)
 	}
 	if why != "" && cfg.Fallback.Enabled {
 		trace.FallbackWhy = why
@@ -249,6 +243,34 @@ func (r *Recognizer) Recognize(ctx context.Context, in Input) (*Draft, *Trace, e
 	r.finishTime(draft, in)
 	finishCurrency(draft, in.Catalog)
 	return draft, trace, nil
+}
+
+// decide asks the decision model. A non-empty reason means the fallback
+// should run.
+func (r *Recognizer) decide(ctx context.Context, rows []Row, in Input, small []byte, trace *Trace) (*Draft, string) {
+	cfg := r.Config
+	trace.DecisionModel = cfg.Decision.Provider + ":" + cfg.Decision.Model
+	q := r.buildQuestions(rows, trace, in)
+	var check *discountCheck
+	if cfg.Fallback.Enabled && r.Router != nil && small != nil && mayAddUpDiscounts(trace.Amounts) {
+		check = r.startDiscountCheck(ctx, rows, small)
+		defer check.cancel()
+		defer func() {
+			if trace.DiscountCheck == nil {
+				trace.DiscountCheck = &DiscountCheck{Note: "用不上，已取消"}
+			}
+		}()
+	}
+	start := time.Now()
+	resp, err := r.Decider.Decide(ctx, openrouter.DecisionsRequest{Model: cfg.Decision.Model, State: r.state(rows, in, small), Questions: q.questions})
+	trace.DecisionMs = time.Since(start).Milliseconds()
+	if err != nil {
+		trace.DecisionError = err.Error()
+		return nil, "决策模型请求失败"
+	}
+	trace.Decision = resp
+	trace.Cost += resp.Usage.Cost
+	return r.interpret(resp.Answers, q, trace, in, check)
 }
 
 func reject(reason string) *Draft { return &Draft{Status: "rejected", Reason: reason, Kind: KindNone} }
@@ -333,7 +355,7 @@ type questionSet struct {
 	questions  map[string]openrouter.Question
 	categories map[string]string // option key -> category id
 	assets     map[string]string // option key -> asset id
-	merchants  map[string]string // option key -> row text
+	merchants  map[string]string // option key -> merchant name
 }
 
 func (r *Recognizer) buildQuestions(rows []Row, trace *Trace, in Input) questionSet {
@@ -425,7 +447,7 @@ func (r *Recognizer) buildQuestions(rows []Row, trace *Trace, in Input) question
 	var merchants []openrouter.Option
 	for i, row := range capList(trace, "文字行", rows, r.Config.Decision.MaxCandidates) {
 		key := fmt.Sprintf("l%d", i)
-		qs.merchants[key] = row.Text
+		qs.merchants[key] = merchantOf(row)
 		merchants = append(merchants, openrouter.Option{Key: key, Description: row.Text})
 	}
 	qs.questions["merchant"] = openrouter.ChoiceQuestion("哪一行写的是交易对方，例如商户名称、收款方或付款人？", merchants)
@@ -524,7 +546,7 @@ func (r *Recognizer) interpret(ans map[string]openrouter.Answer, qs questionSet,
 		}
 	}
 	if m, ok := ans["merchant"]; ok {
-		d.Merchant = merchantName(qs.merchants[m.Choice])
+		d.Merchant = qs.merchants[m.Choice]
 	}
 	return d, ""
 }
@@ -639,6 +661,15 @@ func finishCurrency(d *Draft, c qianji.Catalog) {
 	if d.Converted == "" {
 		d.ConvertedCurrency = ""
 	}
+}
+
+// merchantOf names the counterparty a row may show: its value when the rows
+// model found a label, otherwise the text without a known label.
+func merchantOf(row Row) string {
+	if row.Label != "" {
+		return strings.TrimSpace(strings.TrimPrefix(row.Text, row.Label))
+	}
+	return merchantName(row.Text)
 }
 
 // merchantName strips a leading field label such as "交易商户 ".

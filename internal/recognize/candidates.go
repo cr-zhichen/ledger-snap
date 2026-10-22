@@ -12,11 +12,13 @@ import (
 	"ledger-snap/internal/ocr"
 )
 
-// Row is a set of OCR lines on the same visual row, joined left to right.
+// Row is a set of OCR lines that belong together, joined in reading order.
 type Row struct {
 	Text  string
 	Lines []ocr.Line
-	Y, H  int
+	// Label is the leading part of Text that labels the rest, when the rows
+	// model found one.
+	Label string
 }
 
 // Rows groups lines whose vertical extents overlap. Lines must be sorted.
@@ -28,7 +30,7 @@ func Rows(lines []ocr.Line) []Row {
 			r.Lines = append(r.Lines, l)
 			continue
 		}
-		rows = append(rows, Row{Lines: []ocr.Line{l}, Y: l.Y, H: l.H})
+		rows = append(rows, Row{Lines: []ocr.Line{l}})
 	}
 	for i := range rows {
 		sort.Slice(rows[i].Lines, func(a, b int) bool { return rows[i].Lines[a].X < rows[i].Lines[b].X })
@@ -80,8 +82,10 @@ const dashes = `\-−–—`
 var (
 	amountRe = regexp.MustCompile(`([+` + dashes + `])?\s*([¥￥])?\s*(\d{1,3}(?:,\d{3})+|\d+)(\.\d{1,2})?\s*(元)?`)
 	// Spans that must not be read as amounts: dates, clock times, percentages,
-	// and exchange rates ("1 USD = 7.8809 HKD", numbers with 3+ decimals).
-	notAmountRe = regexp.MustCompile(`\d{4}[` + dashes + `/.年]\d{1,2}[` + dashes + `/.月]\d{1,2}日?|\d{1,2}[` + dashes + `/月]\d{1,2}日?\s+\d{1,2}:\d{2}|\d{1,2}:\d{2}(?::\d{2})?|\d+(?:\.\d+)?\s*%|\d+(?:\.\d+)?\s*[A-Z]{3}\s*[=＝]|\d+\.\d{3,}`)
+	// exchange rates ("1 USD = 7.8809 HKD", numbers with 3+ decimals), and
+	// card numbers ("尾号5678", "(1234)", "6217 **** 3307"), which share a
+	// row with words like 付款 once a label is joined to its value.
+	notAmountRe = regexp.MustCompile(`\d{4}[` + dashes + `/.年]\d{1,2}[` + dashes + `/.月]\d{1,2}日?|\d{1,2}[` + dashes + `/月]\d{1,2}日?\s+\d{1,2}:\d{2}|\d{1,2}:\d{2}(?::\d{2})?|\d+(?:\.\d+)?\s*%|\d+(?:\.\d+)?\s*[A-Z]{3}\s*[=＝]|\d+\.\d{3,}|尾号\s*\d+|\(\d{4}\)|\d{4}\s*\*+|\*+\s*\d{3,4}`)
 	amountLabel = regexp.MustCompile(`金额|实付|合计|付款|支付|收款|到账|消费|总计|应付|已付`)
 )
 
@@ -301,7 +305,7 @@ func clock24(hour int, ampm string) int {
 	return hour
 }
 
-// statusBar reports whether a row sits in the top strip of the screen.
-func statusBar(r Row, imageHeight int) bool {
-	return imageHeight > 0 && r.Y+r.H < imageHeight*4/100
+// statusBar reports whether a line sits in the top strip of the screen.
+func statusBar(l ocr.Line, imageHeight int) bool {
+	return imageHeight > 0 && l.Y+l.H < imageHeight*4/100
 }

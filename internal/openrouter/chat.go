@@ -38,6 +38,17 @@ type ChatResponse struct {
 	} `json:"usage"`
 }
 
+// Routing returns provider preferences: only the given provider when one is
+// named, and with strict output only providers that honor response_format.
+func Routing(provider string, strict bool) map[string]any {
+	p := map[string]any{"require_parameters": strict}
+	if provider != "" {
+		p["order"] = []string{provider}
+		p["allow_fallbacks"] = false
+	}
+	return p
+}
+
 // JSONSchemaFormat requests strict structured output.
 func JSONSchemaFormat(name string, schema map[string]any) map[string]any {
 	return map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": name, "strict": true, "schema": schema}}
