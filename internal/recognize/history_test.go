@@ -14,6 +14,9 @@ import (
 	"ledger-snap/internal/qianji"
 )
 
+// beijing is the zone the config uses, whatever zone the tests run in.
+var beijing = time.FixedZone("CST", 8*3600)
+
 type fakeOCR struct{}
 
 func (fakeOCR) Name() string                                          { return "fake" }
@@ -85,7 +88,7 @@ func recognizeWith(t *testing.T, past []PastBill, d *fakeDecider) (*Draft, *Trac
 	r := &Recognizer{Config: cfg, OCR: fakeOCR{}, Decider: d}
 	var asked []string
 	in := Input{
-		UploadTime: time.Date(2026, 10, 22, 12, 30, 0, 0, time.Local),
+		UploadTime: time.Date(2026, 10, 22, 12, 30, 0, 0, beijing),
 		Catalog:    historyCatalog,
 		Lines: []ocr.Line{
 			{Text: "支付成功", Y: 100, H: 30},
@@ -111,7 +114,7 @@ func recognizeWith(t *testing.T, past []PastBill, d *fakeDecider) (*Draft, *Trac
 }
 
 func past(kind Kind, category string, daysAgo int) PastBill {
-	return PastBill{Time: time.Date(2026, 10, 22-daysAgo, 18, 40, 0, 0, time.Local), Kind: kind, Money: "35.50", CategoryID: category, AssetID: "201"}
+	return PastBill{Time: time.Date(2026, 10, 22-daysAgo, 18, 40, 0, 0, beijing), Kind: kind, Money: "35.50", CategoryID: category, AssetID: "201"}
 }
 
 func TestHistoryAgreeing(t *testing.T) {

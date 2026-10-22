@@ -120,6 +120,9 @@ func (f *fakeQianji) counts() (writes, pulls int) {
 	return len(f.writes), f.pulls
 }
 
+// beijing is the zone the config uses, whatever zone the tests run in.
+var beijing = time.FixedZone("CST", 8*3600)
+
 var testCatalog = qianji.Catalog{
 	Categories: []qianji.Category{
 		{ID: "101", Name: "餐饮", Path: "餐饮", Type: qianji.TypeExpense, Leaf: true},
@@ -181,7 +184,7 @@ func written(t *testing.T, s *Service, u *store.User, d *recognize.Draft) *store
 
 func lunch() *recognize.Draft {
 	return &recognize.Draft{Status: "ok", Kind: recognize.KindExpense, Money: "35.00", CategoryID: "101", AssetID: "201",
-		Time: time.Date(2026, 10, 22, 12, 30, 0, 0, time.Local), Merchant: "麦当劳"}
+		Time: time.Date(2026, 10, 22, 12, 30, 0, 0, beijing), Merchant: "麦当劳"}
 }
 
 func TestEditKeepsAppChanges(t *testing.T) {
@@ -248,7 +251,7 @@ func TestEditGivesUpOnSlowSync(t *testing.T) {
 func TestDuplicateOfBillRecordedInApp(t *testing.T) {
 	s, u, f := newTestService(t)
 	ctx := context.Background()
-	when := time.Date(2026, 10, 22, 12, 30, 0, 0, time.Local)
+	when := time.Date(2026, 10, 22, 12, 30, 0, 0, beijing)
 	f.bills["1767225600000100001"] = map[string]any{"id": json.Number("1767225600000100001"), "type": 0, "money": 35,
 		"time": when.Add(2 * time.Minute).Unix(), "remark": "午饭", "cateid": json.Number("101"), "assetid": json.Number("201")}
 	if _, err := s.SyncBills(ctx, u.UID, false); err != nil {

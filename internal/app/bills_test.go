@@ -69,7 +69,7 @@ func TestReconcile(t *testing.T) {
 func TestHistory(t *testing.T) {
 	s, u, _ := newTestService(t)
 	ctx := context.Background()
-	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.Local)
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, beijing)
 	day := int64(24 * 3600)
 	bill := func(id string, daysAgo int64, body string) store.Bill {
 		at := now.Unix() - daysAgo*day
