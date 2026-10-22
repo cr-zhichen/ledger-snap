@@ -1,6 +1,7 @@
 package qianji
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -44,6 +45,11 @@ type BillInput struct {
 	FromName   string // transfers only, shown by the app as "A->B"
 	TargetName string
 	Currency   *Currency // nil when only the base currency is involved
+	// Transfee is a transfer's fee, or a discount as a negative number;
+	// "" for neither. Money leaves it out: Qianji takes a fee from the source
+	// account on top of Money and adds a discount to the target account. An
+	// expense's discount is noted the same way, with Money what was paid.
+	Transfee string
 }
 
 // Currency is a bill's extra.curr. Money is always in the paying account's
@@ -90,9 +96,11 @@ func NewBill(uid, id string, in BillInput) map[string]any {
 	}
 	extra := map[string]any{}
 	if in.Type == TypeTransfer || in.Type == TypeCreditPayment {
-		extra["transfee"] = json.Number("0")
+		extra["transfee"] = json.Number(cmp.Or(in.Transfee, "0"))
 		bill["fromact"], bill["targetact"] = in.FromName, in.TargetName
 		bill["descinfo"] = in.FromName + "->" + in.TargetName
+	} else if in.Transfee != "" {
+		extra["transfee"] = json.Number(in.Transfee)
 	}
 	if in.Currency != nil {
 		extra["curr"] = in.Currency.extra()

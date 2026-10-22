@@ -1,7 +1,7 @@
 {
   "upload_time": "2026-10-21 23:50",
   "images": {
-    "01_wechat_pay.jpg": {"status": "ok", "kind": "expense", "money": "25.00", "category": "三餐", "asset": "招商银行信用卡(1234)", "time": "2026-10-21 12:31", "merchant": "瑞幸咖啡"},
+    "01_wechat_pay.jpg": {"status": "ok", "kind": "expense", "money": "25.00", "category": "三餐", "asset": "招商银行信用卡(1234)", "time": "2026-10-21 12:31", "merchant": "瑞幸咖啡", "discount": "-"},
     "02_alipay_detail.jpg": {"status": "ok", "kind": "expense", "money": "36.80", "category": "三餐", "asset": "花呗", "time": "2026-10-20 18:42", "merchant": "美团外卖"},
     "03_wechat_receive.jpg": {"status": "ok", "kind": "income", "money": "200.00", "asset": "微信零钱", "merchant": "张三"},
     "04_bank_spend.jpg": {"status": "ok", "kind": "expense", "money": "128.00", "category": "汽车/加油", "time": "2026-10-21 08:05", "merchant": "中国石化"},
@@ -17,15 +17,15 @@
     "14_red_packet_send.jpg": {"status": "ok", "kind": "expense", "money": "66.00", "category": "发红包", "asset": "微信零钱", "time": "2026-10-20 20:10"},
     "15_red_packet_recv.jpg": {"status": "ok", "kind": "income", "money": "8.88", "category": "收红包", "asset": "微信零钱", "time": "2026-10-20 21:02", "merchant": "张三"},
     "16_transfer_to_friend.jpg": {"status": "ok", "kind": "expense", "money": "300.00", "asset": "招商银行储蓄卡(5678)", "time": "2026-10-21 13:18", "merchant": "李四"},
-    "17_withdraw_to_card.jpg": {"status": "ok", "kind": "transfer", "money": "1000.00", "asset": "微信零钱", "target_asset": "招商银行储蓄卡(5678)", "time": "2026-10-21 15:38"},
+    "17_withdraw_to_card.jpg": {"status": "ok", "kind": "transfer", "money": "1000.00", "asset": "微信零钱", "target_asset": "招商银行储蓄卡(5678)", "time": "2026-10-21 15:38", "fee": "-"},
     "18_alipay_to_yeb.jpg": {"status": "ok", "kind": "transfer", "money": "5000.00", "asset": "支付宝余额", "target_asset": "余额宝", "time": "2026-10-21 11:08"},
-    "19_cmb_repay.jpg": {"status": "ok", "kind": "credit", "money": "3280.50", "asset": "工行卡", "target_asset": "招商银行信用卡(1234)", "time": "2026-10-20 19:28"},
+    "19_cmb_repay.jpg": {"status": "ok", "kind": "credit", "money": "3280.50", "asset": "工行卡", "target_asset": "招商银行信用卡(1234)", "time": "2026-10-20 19:28", "discount": "-", "fee": "-"},
     "20_huabei_repay.jpg": {"status": "ok", "kind": "credit", "money": "1200.00", "asset": "余额宝", "target_asset": "花呗", "time": "2026-10-20 22:03"},
-    "21_taxi_breakdown.jpg": {"status": "ok", "kind": "expense", "money": "41.20", "category": "交通", "asset": "招商银行信用卡(1234)"},
-    "22_jd_order.jpg": {"status": "ok", "kind": "expense", "money": "297.00", "category": "电器数码", "asset": "中信信用卡"},
+    "21_taxi_breakdown.jpg": {"status": "ok", "kind": "expense", "money": "41.20", "category": "交通", "asset": "招商银行信用卡(1234)", "discount": "5.00"},
+    "22_jd_order.jpg": {"status": "ok", "kind": "expense", "money": "297.00", "category": "电器数码", "asset": "中信信用卡", "discount": "32.00"},
     "23_bill_list.jpg": {"status": "rejected"},
     "24_dark_lawson.jpg": {"status": "ok", "kind": "expense", "money": "12.50", "time": "2026-10-20 23:40", "merchant": "罗森"},
-    "25_ad_heavy.jpg": {"status": "ok", "kind": "expense", "money": "18.00", "asset": "微信零钱", "time": "2026-10-21 08:14", "merchant": "便利蜂"},
+    "25_ad_heavy.jpg": {"status": "ok", "kind": "expense", "money": "18.00", "asset": "微信零钱", "time": "2026-10-21 08:14", "merchant": "便利蜂", "discount": "-"},
     "26_refund.jpg": {"status": "ok", "kind": "refund"},
     "27_stock.jpg": {"status": "rejected"},
     "28_news.jpg": {"status": "rejected"},
@@ -37,6 +37,11 @@
     "34_fx_exchange.jpg": {"status": "ok", "kind": "transfer", "money": "7881.80", "currency": "HKD", "converted": "1000.00 USD", "asset": "汇丰One 港元储蓄", "target_asset": "汇丰One 美元储蓄", "time": "2026-10-21 10:15"},
     "35_card_usd.jpg": {"status": "ok", "kind": "expense", "money": "12.99", "currency": "USD", "converted": "93.50 CNY", "asset": "招商银行信用卡(1234)", "time": "2026-10-20 23:12", "merchant": "APPLE"},
     "36_hkd_spend.jpg": {"status": "ok", "kind": "expense", "money": "45.00", "currency": "HKD", "asset": "汇丰One 港元储蓄", "time": "2026-10-21 08:30", "merchant": "STARBUCKS"},
-    "37_card_email_en.jpg": {"status": "ok", "kind": "expense", "money": "11.85", "category": "三餐", "asset": "招行经典白", "time": "2026-10-13 12:00", "merchant": "LUCKIN"}
+    "37_card_email_en.jpg": {"status": "ok", "kind": "expense", "money": "11.85", "category": "三餐", "asset": "招行经典白", "time": "2026-10-13 12:00", "merchant": "LUCKIN"},
+    "38_unionpay_repay_discount.jpg": {"status": "ok", "kind": "credit", "money": "995.00", "discount": "5.00", "fee": "-", "asset": "工行卡", "target_asset": "招商银行信用卡(1234)", "time": "2026-10-21 09:10"},
+    "39_wechat_withdraw_fee.jpg": {"status": "ok", "kind": "transfer", "money": "2002.00", "fee": "2.00", "discount": "-", "asset": "微信零钱", "target_asset": "招商银行储蓄卡(5678)", "time": "2026-10-21 16:02"},
+    "40_alipay_withdraw_fee.jpg": {"status": "ok", "kind": "transfer", "money": "500.00", "fee": "0.50", "discount": "-", "asset": "支付宝余额", "target_asset": "建设银行储蓄卡(0921)", "time": "2026-10-21 20:31"},
+    "41_taobao_multi_discount.jpg": {"status": "ok", "kind": "expense", "money": "162.01", "discount": "36.99", "asset": "花呗", "time": "2026-10-21 21:15"},
+    "42_meituan_total_discount.jpg": {"status": "ok", "kind": "expense", "money": "54.00", "discount": "21.00", "asset": "招商银行信用卡(1234)", "time": "2026-10-21 11:42", "merchant": "老乡鸡"}
   }
 }

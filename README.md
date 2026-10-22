@@ -80,7 +80,7 @@ mise run serve
 | `ledger-snap qianji-smoke` | 测试账号登录，全量拉取账单，新增、修改、删除一笔 0.01 元账单，并确认增量拉取能拿到修改和删除 |
 | `ledger-snap seed-assets` | 在测试账号里新建一批容易混淆的账户（已存在的跳过） |
 
-测试截图在 `testdata/screens`，共 36 张：普通支付、待支付、容易混淆的账户和商户、红包和转账、自己账户之间的转账和还款、复杂界面（费用明细、电商订单、账单列表、深色模式、带广告、短信）、外币（换汇、境外消费、港元账户消费）、支付失败，以及与支付无关的页面。截图由 `src/` 里的网页生成，修改后运行 `testdata/screens/render.sh` 重新生成；标注在 `labels.json`。
+测试截图在 `testdata/screens`，共 42 张：普通支付、待支付、容易混淆的账户和商户、红包和转账、自己账户之间的转账和还款、复杂界面（费用明细、电商订单、账单列表、深色模式、带广告、短信）、外币（换汇、境外消费、港元账户消费）、优惠和手续费（还款优惠、提现服务费、多项优惠）、支付失败，以及与支付无关的页面。截图由 `src/` 里的网页生成，修改后运行 `testdata/screens/render.sh` 重新生成，只重新生成某几张时把文件名跟在后面；标注在 `labels.json`。
 
 `recognize` 和 `eval` 支持 `--provider`、`--decision-provider`、`--decision-model`、`--fallback-model`、`--no-image`、`--no-fallback`、`--force-fallback`，可以不改配置直接对比。
 

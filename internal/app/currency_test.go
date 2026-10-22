@@ -134,6 +134,36 @@ func TestMoneyOf(t *testing.T) {
 			},
 		},
 		{
+			name:  "expense discount is only noted",
+			draft: recognize.Draft{Kind: recognize.KindExpense, Money: "41.20", Discount: "5.00", AssetID: "cny"},
+			want:  billMoney{Value: "41.20", Transfee: "-5.00", Text: "41.20（优惠 5.00）"},
+		},
+		{
+			name:  "repayment discount reaches the card",
+			draft: recognize.Draft{Kind: recognize.KindCredit, Money: "995.00", Discount: "5.00", AssetID: "cny", TargetID: "cny2"},
+			want:  billMoney{Value: "995.00", Transfee: "-5.00", Text: "995.00（优惠 5.00，到账 1000.00）"},
+		},
+		{
+			name:  "withdrawal fee leaves the source on top",
+			draft: recognize.Draft{Kind: recognize.KindTransfer, Money: "1001.00", Fee: "1.00", AssetID: "cny", TargetID: "cny2"},
+			want:  billMoney{Value: "1000.00", Transfee: "1.00", Text: "1001.00（手续费 1.00，到账 1000.00）"},
+		},
+		{
+			name:  "income has no discount",
+			draft: recognize.Draft{Kind: recognize.KindIncome, Money: "100.00", Discount: "5.00", Fee: "1.00", AssetID: "cny"},
+			want:  billMoney{Value: "100.00", Text: "100.00"},
+		},
+		{
+			name:  "two currencies carry the fee in both amounts",
+			draft: recognize.Draft{Kind: recognize.KindTransfer, Money: "1000.00", Currency: "CNY", Converted: "1172.90", Fee: "1.00", AssetID: "cny", TargetID: "hkd"},
+			want: billMoney{
+				Value:    "1000.00",
+				Currency: &qianji.Currency{Source: "CNY", SourceValue: "1000.00", Target: "HKD", TargetValue: "1172.90"},
+				Other:    "1172.90", OtherCurrency: "HKD",
+				Text: "1000.00 CNY → 1172.90 HKD",
+			},
+		},
+		{
 			name:  "foreign currency without an account",
 			draft: recognize.Draft{Kind: recognize.KindExpense, Money: "10.00", Currency: "USD"},
 			want: billMoney{
@@ -163,5 +193,37 @@ func TestMoneyOf(t *testing.T) {
 	d.Converted = "20.00"
 	if got, err := moneyOf(&d, c); err != nil || got.Value != "20.00" || got.Estimated {
 		t.Errorf("typed amount: got %+v, err %v", got, err)
+	}
+
+	fee := recognize.Draft{Kind: recognize.KindTransfer, Money: "1.00", Fee: "1.00", AssetID: "cny", TargetID: "cny2"}
+	if _, err := moneyOf(&fee, c); err == nil {
+		t.Error("a fee as large as the amount should be refused")
+	}
+}
+
+// TestDiscountRoundTrip writes drafts with a discount or fee as Qianji bills
+// and reads them back the way the bill cache does.
+func TestDiscountRoundTrip(t *testing.T) {
+	c := qianji.Catalog{Assets: []qianji.Asset{
+		{ID: "1", Name: "工行卡"}, {ID: "2", Name: "招行信用卡", Type: qianji.AssetTypeCredit},
+	}}
+	for _, d := range []recognize.Draft{
+		{Kind: recognize.KindExpense, Money: "41.20", Discount: "5.00", AssetID: "1"},
+		{Kind: recognize.KindCredit, Money: "995.00", Discount: "5.00", AssetID: "1", TargetID: "2"},
+		{Kind: recognize.KindTransfer, Money: "1001.00", Fee: "1.00", AssetID: "2", TargetID: "1"},
+		{Kind: recognize.KindTransfer, Money: "100.00", AssetID: "1", TargetID: "2"},
+	} {
+		m, err := moneyOf(&d, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		qb, err := parseBill(toJSON(qianji.NewBill("u", "9", billInput(&d, c, m))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := qb.draft()
+		if !ok || got.Money != d.Money || got.Discount != d.Discount || got.Fee != d.Fee {
+			t.Errorf("%s %s: read back %+v", d.Kind, d.Money, got)
+		}
 	}
 }

@@ -60,6 +60,13 @@ type Draft struct {
 	// cost in the card's currency. "" currency means the other account's.
 	Converted         string `json:"converted,omitempty"`
 	ConvertedCurrency string `json:"converted_currency,omitempty"`
+	// Discount is what the user saved, "" for none. For an expense Money is
+	// already what was paid; for a transfer or repayment the target account
+	// receives Money plus the discount.
+	Discount string `json:"discount,omitempty"`
+	// Fee is what a transfer or repayment cost on top of what the target
+	// account received; Money includes it. "" for none.
+	Fee string `json:"fee,omitempty"`
 }
 
 func (d *Draft) mark(field string) {
@@ -102,7 +109,10 @@ type Trace struct {
 	Fallback      *FallbackResult               `json:"fallback,omitempty"`
 	FallbackError string                        `json:"fallback_error,omitempty"`
 	FallbackWhy   string                        `json:"fallback_why,omitempty"`
-	MemoryHits    []string                      `json:"memory_hits,omitempty"`
+	// DiscountCheck is the vision model's discount total for a screenshot
+	// with several discount rows; see discounts.go.
+	DiscountCheck *DiscountCheck `json:"discount_check,omitempty"`
+	MemoryHits    []string       `json:"memory_hits,omitempty"`
 	// History is the earlier bills shown to the models, by merchant.
 	History      map[string][]PastBill `json:"history,omitempty"`
 	HistoryError string                `json:"history_error,omitempty"`
@@ -189,6 +199,11 @@ func (r *Recognizer) Recognize(ctx context.Context, in Input) (*Draft, *Trace, e
 		}
 	}
 	q := r.buildQuestions(rows, trace, in)
+	var check *discountCheck
+	if cfg.Fallback.Enabled && r.Router != nil && small != nil && mayAddUpDiscounts(trace.Amounts) {
+		check = r.startDiscountCheck(ctx, rows, small)
+		defer check.cancel()
+	}
 	dStart := time.Now()
 	resp, err := r.Decider.Decide(ctx, openrouter.DecisionsRequest{Model: cfg.Decision.Model, State: r.state(rows, in, small), Questions: q.questions})
 	trace.DecisionMs = time.Since(dStart).Milliseconds()
@@ -200,7 +215,10 @@ func (r *Recognizer) Recognize(ctx context.Context, in Input) (*Draft, *Trace, e
 	} else {
 		trace.Decision = resp
 		trace.Cost += resp.Usage.Cost
-		draft, why = r.interpret(resp.Answers, q, trace, in)
+		draft, why = r.interpret(resp.Answers, q, trace, in, check)
+	}
+	if check != nil && trace.DiscountCheck == nil {
+		trace.DiscountCheck = &DiscountCheck{Note: "用不上，已取消"}
 	}
 	if why != "" && cfg.Fallback.Enabled {
 		trace.FallbackWhy = why
@@ -349,7 +367,15 @@ func (r *Recognizer) buildQuestions(rows []Row, trace *Trace, in Input) question
 		foreign = foreign || (a.Currency != "" && a.Currency != "CNY")
 		amounts = append(amounts, openrouter.Option{Key: a.Key, Description: fmt.Sprintf("%s%s%s（所在行：%s）", sign, a.Value, currency, a.Context)})
 	}
-	qs.questions["amount"] = openrouter.ChoiceQuestion("这笔交易实际付款或到账的金额是哪一个？还没付款时选要付的金额；有优惠时选优惠后的实付金额，不要选原价、优惠金额、余额或订单号。换汇或跨币种转账时选卖出、转出的金额；外币消费同时显示原币和折算金额时选原币金额。", amounts)
+	qs.questions["amount"] = openrouter.ChoiceQuestion("这笔交易实际付款或到账的金额是哪一个？还没付款时选要付的金额；有优惠时选优惠后的实付金额，不要选原价、优惠金额、手续费、余额或订单号。换汇或跨币种转账时选卖出、转出的金额；外币消费同时显示原币和折算金额时选原币金额。", amounts)
+	if len(trace.Amounts) > 1 {
+		// A discount or fee is another amount in the screenshot; with only
+		// one amount there is neither.
+		qs.questions["discount"] = openrouter.ChoiceQuestion("这笔交易本身一共优惠了多少钱？包括立减、满减、优惠券、红包或积分抵扣、还款优惠。有优惠合计时选合计。广告、推荐商品、付款后领到的券、以后才能用的优惠都不算。",
+			append([]openrouter.Option{{Key: "none", Description: "这笔交易没有优惠"}}, amounts[1:]...))
+		qs.questions["fee"] = openrouter.ChoiceQuestion("这笔交易另外收了多少手续费或服务费？例如提现服务费、还款手续费、转账手续费。写着免费或 0 元时选没有。",
+			append([]openrouter.Option{{Key: "none", Description: "这笔交易没有收手续费"}}, amounts[1:]...))
+	}
 	if foreign {
 		// Only screenshots that show a foreign currency can carry a second
 		// amount in another currency.
@@ -428,7 +454,7 @@ func limit[T any](items []T, n int) []T {
 
 // interpret maps answers to a draft. A non-empty reason means the answers
 // were not trustworthy enough and the fallback should run.
-func (r *Recognizer) interpret(ans map[string]openrouter.Answer, qs questionSet, trace *Trace, in Input) (*Draft, string) {
+func (r *Recognizer) interpret(ans map[string]openrouter.Answer, qs questionSet, trace *Trace, in Input, check *discountCheck) (*Draft, string) {
 	th := r.Config.Decision.Thresholds
 	transaction := ans["transaction"].Noul
 	kind := ans["kind"]
@@ -456,6 +482,7 @@ func (r *Recognizer) interpret(ans map[string]openrouter.Answer, qs questionSet,
 			}
 		}
 	}
+	r.adjust(d, ans, trace, check)
 	if t := ans["time"]; t.Choice != "none" {
 		for _, c := range trace.Times {
 			if c.Key == t.Choice {
@@ -517,6 +544,71 @@ func pickAmount(cands []AmountCandidate, ans openrouter.Answer) (string, float64
 		}
 	}
 	return money, p
+}
+
+// adjust reads the discount and, for a transfer or repayment, the fee, and
+// settles what left the paying account. The picked amount may be either side
+// of a discount or fee; the other side tells which when the screenshot shows
+// it too. Otherwise the amount counts as what was paid for a discount, as the
+// amount question asks, and as what arrived for a fee, since fees are mostly
+// charged on top. Bills in two currencies are left as they are: both amounts
+// are shown, so the fee or discount is already in them.
+//
+// An expense's discount only notes what was saved, so an unsure one is left
+// out; a transfer's discount and fee move the accounts, so unsure ones stay
+// for the user to check. A discount split over several rows takes the
+// total from the vision check, when there is one.
+func (r *Recognizer) adjust(d *Draft, ans map[string]openrouter.Answer, trace *Trace, check *discountCheck) {
+	if d.Converted != "" || (d.Kind != KindExpense && !d.Kind.IsTransfer()) {
+		return
+	}
+	th := r.Config.Decision.Thresholds.Amount
+	cands := trace.Amounts
+	paid := toCents(d.Money)
+	shown := func(c int64) bool {
+		return slices.ContainsFunc(cands, func(a AmountCandidate) bool { return a.Value == fromCents(c) })
+	}
+	discount, pd := pickExtra(cands, ans["discount"], paid)
+	if total, ok := discountTotal(check, cands, paid, discount, trace); ok {
+		discount, pd = total, 1
+	}
+	fee, pf := int64(0), 0.0
+	if d.Kind.IsTransfer() {
+		fee, pf = pickExtra(cands, ans["fee"], paid)
+	} else if pd < th {
+		discount = 0
+	}
+	switch {
+	case fee > 0 && discount > 0:
+	case fee > 0 && !shown(paid-fee):
+		paid += fee
+	case discount > 0 && shown(paid-discount) && !shown(paid+discount):
+		paid -= discount
+	}
+	d.Money = fromCents(paid)
+	if discount > 0 {
+		d.Discount = fromCents(discount)
+		if pd < th {
+			d.mark("discount")
+		}
+	}
+	if fee > 0 {
+		d.Fee = fromCents(fee)
+		if pf < th {
+			d.mark("fee")
+		}
+	}
+}
+
+// pickExtra returns the discount or fee a question picked, in cents: 0 for
+// none, and for one not smaller than the amount, which is no part of it.
+func pickExtra(cands []AmountCandidate, a openrouter.Answer, amount int64) (int64, float64) {
+	v, p := pickAmount(cands, a)
+	c := toCents(v)
+	if v == "" || p <= a.Probabilities["none"] || c >= amount {
+		return 0, a.Probabilities["none"]
+	}
+	return c, p
 }
 
 // currencyOf returns the currency shown with any row that has this amount.

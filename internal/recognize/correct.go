@@ -27,6 +27,8 @@ type CorrectionTrace struct {
 type correctionFields struct {
 	Amount   string `json:"amount"`
 	Currency string `json:"currency"`
+	Discount string `json:"discount"`
+	Fee      string `json:"fee"`
 	Time     string `json:"time"`
 	Merchant string `json:"merchant"`
 }
@@ -40,6 +42,12 @@ func moneyText(d *Draft) string {
 	}
 	if d.Converted != "" {
 		s += "（另一币种 " + strings.TrimSpace(d.Converted+" "+d.ConvertedCurrency) + "）"
+	}
+	if d.Discount != "" {
+		s += "（优惠 " + d.Discount + "）"
+	}
+	if d.Fee != "" {
+		s += "（含手续费 " + d.Fee + "）"
 	}
 	return s
 }
@@ -84,7 +92,8 @@ func (r *Recognizer) Correct(ctx context.Context, d *Draft, catalog qianji.Catal
 			{Key: string(KindTransfer), Description: "自己账户之间转账"},
 			{Key: string(KindCredit), Description: "还自己的信用卡、花呗"},
 		}),
-		"amount": openrouter.NoulQuestion("用户要求修改金额。", "修改意见里给出了新的金额。", "修改意见没有提到金额。"),
+		"amount": openrouter.NoulQuestion("用户要求修改金额（优惠和手续费不算）。", "修改意见里给出了新的金额。", "修改意见没有提到金额。"),
+		"adjust": openrouter.NoulQuestion("用户要求修改优惠或手续费。", "修改意见里给出了新的优惠或手续费，或者说没有优惠、没有手续费。", "修改意见没有提到优惠或手续费。"),
 		"time":   openrouter.NoulQuestion("用户要求修改时间或日期。", "修改意见里给出了新的时间或日期，例如昨天、上午十点。", "修改意见没有提到时间。"),
 		"remark": openrouter.NoulQuestion("用户要求修改备注或商户名称。", "修改意见里给出了新的备注或商户。", "修改意见没有提到备注或商户。"),
 	}
@@ -147,7 +156,7 @@ func (r *Recognizer) Correct(ctx context.Context, d *Draft, catalog qianji.Catal
 	if a, ok := ans["asset"]; ok && a.Choice != keep {
 		out.AssetID = assetKeys[a.Choice]
 	}
-	if ans["amount"].Noul >= 0.5 || ans["time"].Noul >= 0.5 || ans["remark"].Noul >= 0.5 {
+	if ans["amount"].Noul >= 0.5 || ans["adjust"].Noul >= 0.5 || ans["time"].Noul >= 0.5 || ans["remark"].Noul >= 0.5 {
 		fields, cost, err := r.correctFields(ctx, d, catalog, text, now)
 		tr.LLMModel, tr.Cost = r.Config.Correction.Model, tr.Cost+cost
 		if err != nil {
@@ -155,12 +164,16 @@ func (r *Recognizer) Correct(ctx context.Context, d *Draft, catalog qianji.Catal
 		}
 		tr.LLM = fields
 		if ans["amount"].Noul >= 0.5 && fields.Amount != "" {
-			if m, err := normalizeMoney(strings.ReplaceAll(numberRe.FindString(fields.Amount), ",", "")); err == nil && m != "0.00" {
+			if m, err := amountIn(fields.Amount); err == nil && m != "0.00" {
 				out.Money = m
 				if cur := CurrencyCode(fields.Currency); cur != "" {
 					out.Currency = cur
 				}
 			}
+		}
+		if ans["adjust"].Noul >= 0.5 {
+			out.Discount = saidPart(fields.Discount, out.Discount)
+			out.Fee = saidPart(fields.Fee, out.Fee)
 		}
 		if ans["time"].Noul >= 0.5 && fields.Time != "" {
 			if t, err := time.ParseInLocation("2006-01-02 15:04", fields.Time, loc); err == nil {
@@ -172,6 +185,19 @@ func (r *Recognizer) Correct(ctx context.Context, d *Draft, catalog qianji.Catal
 		}
 	}
 	return &out, tr, nil
+}
+
+// saidPart is the discount or fee the user gave, or was when they gave
+// none; 0 removes it.
+func saidPart(said, was string) string {
+	m, err := amountIn(said)
+	switch {
+	case said == "" || err != nil:
+		return was
+	case m == "0.00":
+		return ""
+	}
+	return m
 }
 
 func bestExcept(a openrouter.Answer, except string) string {
@@ -196,17 +222,19 @@ var correctionSchema = map[string]any{
 	"properties": map[string]any{
 		"amount":   map[string]any{"type": "string", "description": "新的金额，两位小数；没提到则为空字符串"},
 		"currency": map[string]any{"type": "string", "description": "新金额的币种代码，例如 USD、HKD；没说币种则为空字符串"},
+		"discount": map[string]any{"type": "string", "description": "新的优惠金额，两位小数；说没有优惠时为 0；没提到则为空字符串"},
+		"fee":      map[string]any{"type": "string", "description": "新的手续费，两位小数；说没有手续费时为 0；没提到则为空字符串"},
 		"time":     map[string]any{"type": "string", "description": "新的时间，格式 YYYY-MM-DD HH:MM；没提到则为空字符串"},
 		"merchant": map[string]any{"type": "string", "description": "新的备注或商户名称；没提到则为空字符串"},
 	},
-	"required":             []string{"amount", "currency", "time", "merchant"},
+	"required":             []string{"amount", "currency", "discount", "fee", "time", "merchant"},
 	"additionalProperties": false,
 }
 
 func (r *Recognizer) correctFields(ctx context.Context, d *Draft, catalog qianji.Catalog, text string, now time.Time) (*correctionFields, float64, error) {
 	cfg := r.Config.Correction
 	loc := r.Config.Location()
-	prompt := fmt.Sprintf("用户刚记了一笔账：%s\n现在时间（北京时间）：%s\n用户的修改意见：%s\n\n从修改意见里提取新的金额（说了币种时一并提取）、时间和备注。时间按北京时间换算成绝对时间，只说了日期时保留原来的时分；没提到的字段返回空字符串。",
+	prompt := fmt.Sprintf("用户刚记了一笔账：%s\n现在时间（北京时间）：%s\n用户的修改意见：%s\n\n从修改意见里提取新的金额（说了币种时一并提取）、优惠、手续费、时间和备注。时间按北京时间换算成绝对时间，只说了日期时保留原来的时分；没提到的字段返回空字符串。",
 		Describe(d, catalog, loc), now.In(loc).Format("2006-01-02 15:04（Monday）"), text)
 	req := openrouter.ChatRequest{
 		Model:          cfg.Model,

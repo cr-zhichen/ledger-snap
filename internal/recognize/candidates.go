@@ -165,6 +165,19 @@ func normalizeMoney(s string) (string, error) {
 	return whole + "." + frac, nil
 }
 
+// toCents reads a normalized amount such as "12.50"; 0 when it is not one.
+func toCents(s string) int64 {
+	whole, frac, _ := strings.Cut(s, ".")
+	w, err := strconv.ParseInt(whole, 10, 64)
+	if err != nil || len(frac) > 2 {
+		return 0
+	}
+	f, _ := strconv.ParseInt((frac + "00")[:2], 10, 64)
+	return w*100 + f
+}
+
+func fromCents(c int64) string { return fmt.Sprintf("%d.%02d", c/100, c%100) }
+
 type TimeCandidate struct {
 	Key     string    `json:"key"`
 	Time    time.Time `json:"time"`

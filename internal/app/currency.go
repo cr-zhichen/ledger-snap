@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"ledger-snap/internal/qianji"
 	"ledger-snap/internal/recognize"
@@ -24,7 +25,10 @@ type billMoney struct {
 	// OtherCurrency: what a transfer's target account received, or what a
 	// foreign purchase cost in the account's currency.
 	Other, OtherCurrency string
-	Text                 string // for the summary, e.g. "3940.45 HKD → 500.00 USD"
+	// Transfee is the bill's extra.transfee: a fee, or a discount as a
+	// negative number; "" for neither.
+	Transfee string
+	Text     string // for the summary, e.g. "3940.45 HKD → 500.00 USD"
 }
 
 type amount struct {
@@ -103,7 +107,7 @@ func moneyOf(d *recognize.Draft, c qianji.Catalog) (billMoney, error) {
 		}
 		m.Value, m.Text = money(sent), money(sent)
 		if from == base && to == base {
-			return m, nil
+			return m, adjust(&m, d, sent)
 		}
 		m.Currency = &qianji.Currency{Source: from, SourceValue: money(sent), Target: to, TargetValue: money(received)}
 		if from != base {
@@ -152,8 +156,9 @@ func moneyOf(d *recognize.Draft, c qianji.Catalog) (billMoney, error) {
 			}
 			m.Currency = &qianji.Currency{Source: paid.currency, SourceValue: money(paid.value), Base: base, BaseValue: money(b)}
 			m.Text += " " + paid.currency
+			return m, nil
 		}
-		return m, nil
+		return m, adjust(&m, d, paid.value)
 	}
 	m := billMoney{OtherCurrency: account}
 	cost, err := value(account, true)
@@ -172,6 +177,41 @@ func moneyOf(d *recognize.Draft, c qianji.Catalog) (billMoney, error) {
 	}
 	m.Text = money(paid.value) + " " + paid.currency + " = " + approx(estimated) + money(cost) + " " + account
 	return m, nil
+}
+
+// adjust applies a draft's discount and, for a transfer or repayment, its
+// fee to a bill in the base currency. Qianji keeps the amount without the fee
+// and moves the accounts by extra.transfee on top of it: a fee out of the
+// source account, a discount into the target account (docs/design.md 6.3).
+// sent is what left the paying account.
+func adjust(m *billMoney, d *recognize.Draft, sent float64) error {
+	var fee, discount float64
+	if d.Kind.IsTransfer() {
+		fee, _ = strconv.ParseFloat(d.Fee, 64)
+	}
+	if d.Kind == recognize.KindExpense || d.Kind.IsTransfer() {
+		discount, _ = strconv.ParseFloat(d.Discount, 64)
+	}
+	if fee <= 0 && discount <= 0 {
+		return nil
+	}
+	t := fee - discount
+	if sent-max(t, 0) < 0.005 {
+		return fmt.Errorf("手续费 %s 不比金额 %s 少，请改金额或手续费", d.Fee, d.Money)
+	}
+	m.Value, m.Transfee = money(sent-max(t, 0)), money(t)
+	var notes []string
+	if fee > 0 {
+		notes = append(notes, "手续费 "+money(fee))
+	}
+	if discount > 0 {
+		notes = append(notes, "优惠 "+money(discount))
+	}
+	if d.Kind.IsTransfer() {
+		notes = append(notes, "到账 "+money(sent-t))
+	}
+	m.Text += "（" + strings.Join(notes, "，") + "）"
+	return nil
 }
 
 func money(v float64) string { return strconv.FormatFloat(math.Round(v*100)/100, 'f', 2, 64) }

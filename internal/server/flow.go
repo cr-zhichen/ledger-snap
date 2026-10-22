@@ -52,6 +52,8 @@ const (
 	optKind     = "收支类型"
 	optCategory = "分类"
 	optMoney    = "金额"
+	optDiscount = "优惠"
+	optFee      = "手续费"
 	optTime     = "时间"
 	optText     = "用一句话改"
 	optRefresh  = "刷新账户和分类"
@@ -217,6 +219,10 @@ func (s *Server) advance(ctx context.Context, u *store.User, id string, path []s
 		return s.patch(ctx, u, id, app.Patch{Money: strings.ReplaceAll(value, ",", "")})
 	case "other":
 		return s.patch(ctx, u, id, app.Patch{Other: strings.ReplaceAll(value, ",", "")})
+	case "discount":
+		return s.patch(ctx, u, id, app.Patch{Discount: strings.ReplaceAll(value, ",", "")})
+	case "fee":
+		return s.patch(ctx, u, id, app.Patch{Fee: strings.ReplaceAll(value, ",", "")})
 	case "time":
 		return s.patch(ctx, u, id, app.Patch{Time: value})
 	case "text":
@@ -232,12 +238,12 @@ func (s *Server) advance(ctx context.Context, u *store.User, id string, path []s
 // goesBack reports whether answering step with value returns to the edit
 // menu. Cancelling an input dialog stops the whole shortcut, so the input
 // steps take an empty answer as going back instead, and the amount steps 0
-// too, as an amount is never 0.
+// too, as an amount is never 0. A discount or fee of 0 removes it.
 func goesBack(step, value string) bool {
 	switch step {
 	case "kind", "category", "asset", "source", "target":
 		return value == optBack
-	case "time", "text":
+	case "time", "text", "discount", "fee":
 		return value == ""
 	case "money", "other":
 		v, err := strconv.ParseFloat(strings.ReplaceAll(value, ",", ""), 64)
@@ -312,6 +318,10 @@ func (s *Server) editChoice(ctx context.Context, u *store.User, id, value string
 		return s.pickCategory(ctx, u, id, kind)
 	case optMoney:
 		return &Step{Action: "number", Prompt: "金额（现在是 " + strings.TrimSpace(cur.Money+" "+cur.Currency) + "，留空返回）", Next: flowPath(id, "money")}, nil
+	case optDiscount:
+		return &Step{Action: "number", Prompt: "优惠金额（" + currently(cur.Discount) + "填 0 表示没有优惠，留空返回）", Next: flowPath(id, "discount")}, nil
+	case optFee:
+		return &Step{Action: "number", Prompt: "手续费（" + currently(cur.Fee) + "填 0 表示没有，留空返回）", Next: flowPath(id, "fee")}, nil
 	case optTime:
 		return &Step{Action: "text", Prompt: "时间，格式如 " + cur.Time + "（清空返回）", Default: cur.Time, Next: flowPath(id, "time")}, nil
 	case optText:
@@ -408,13 +418,22 @@ func editedStep(res *app.Result) *Step {
 }
 
 func editStep(cur *app.Result, note string) *Step {
+	kind := kindOf(cur.Kind)
 	opts := []string{optAsset, optKind}
-	if !kindOf(cur.Kind).IsTransfer() {
+	if !kind.IsTransfer() {
 		opts = append(opts, optCategory)
 	}
 	opts = append(opts, optMoney)
 	if o := otherOption(cur); o != "" {
 		opts = append(opts, o)
+	} else {
+		// Two-currency bills carry their discount or fee in both amounts.
+		if kind == recognize.KindExpense || kind.IsTransfer() {
+			opts = append(opts, optDiscount)
+		}
+		if kind.IsTransfer() {
+			opts = append(opts, optFee)
+		}
 	}
 	opts = append(opts, optTime, optText, optRefresh)
 	prompt := "改哪一项？"
@@ -455,6 +474,14 @@ func choose(prompt string, options []string, id string, path ...string) *Step {
 }
 
 func done(message string) *Step { return &Step{Action: "done", Message: message} }
+
+// currently describes the current discount or fee in a prompt.
+func currently(v string) string {
+	if v == "" {
+		return "现在没有；"
+	}
+	return "现在是 " + v + "；"
+}
 
 func withNote(note, text string) string {
 	if note == "" {

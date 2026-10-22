@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"flag"
@@ -30,6 +31,8 @@ type label struct {
 	Currency string `json:"currency"` // currency code of money
 	// Converted is the other-currency amount as "500.00 USD".
 	Converted string `json:"converted"`
+	Discount  string `json:"discount"` // "-" for none
+	Fee       string `json:"fee"`      // "-" for none
 }
 
 type labelFile struct {
@@ -82,7 +85,7 @@ func runEval(ctx context.Context, args []string) error {
 	}
 	sort.Strings(names)
 	fmt.Printf("OCR=%s 决策=%s 兜底=%s（启用=%v）\n\n", cfg.OCR.Provider, cfg.Decision.Model, cfg.Fallback.Model, cfg.Fallback.Enabled)
-	fields := []string{"status", "kind", "money", "currency", "converted", "category", "asset", "target_asset", "time", "merchant"}
+	fields := []string{"status", "kind", "money", "currency", "converted", "discount", "fee", "category", "asset", "target_asset", "time", "merchant"}
 	right, checked := map[string]int{}, map[string]int{}
 	var totals []int64
 	cost, fallbacks := 0.0, 0
@@ -143,12 +146,13 @@ func runEval(ctx context.Context, args []string) error {
 }
 
 func field(l label, name string) string {
-	return map[string]string{"status": l.Status, "kind": l.Kind, "money": l.Money, "category": l.Category, "asset": l.Asset, "target_asset": l.Target, "time": l.Time, "merchant": l.Merchant, "currency": l.Currency, "converted": l.Converted}[name]
+	return map[string]string{"status": l.Status, "kind": l.Kind, "money": l.Money, "category": l.Category, "asset": l.Asset, "target_asset": l.Target, "time": l.Time, "merchant": l.Merchant, "currency": l.Currency, "converted": l.Converted, "discount": l.Discount, "fee": l.Fee}[name]
 }
 
 func actual(d *recognize.Draft, c qianji.Catalog, cfg *config.Config) map[string]string {
 	got := map[string]string{"status": d.Status, "kind": string(d.Kind), "money": d.Money, "merchant": d.Merchant, "asset": "-", "target_asset": "-",
-		"currency": d.Currency, "converted": strings.TrimSpace(d.Converted + " " + d.ConvertedCurrency)}
+		"currency": d.Currency, "converted": strings.TrimSpace(d.Converted + " " + d.ConvertedCurrency),
+		"discount": cmp.Or(d.Discount, "-"), "fee": cmp.Or(d.Fee, "-")}
 	if d.Status != "ok" {
 		return got
 	}

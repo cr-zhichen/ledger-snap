@@ -212,7 +212,10 @@ type Result struct {
 	// currency.
 	Other         string `json:"other,omitempty"`
 	OtherCurrency string `json:"other_currency,omitempty"`
-	Time          string `json:"time,omitempty"` // TimeLayout
+	// Discount and Fee are as recognized or edited; see recognize.Draft.
+	Discount string `json:"discount,omitempty"`
+	Fee      string `json:"fee,omitempty"`
+	Time     string `json:"time,omitempty"` // TimeLayout
 }
 
 // TimeLayout is how times are shown to and typed by the user.
@@ -222,6 +225,7 @@ func (s *Service) result(rec *store.Record, d *recognize.Draft, c qianji.Catalog
 	res := &Result{RecordID: rec.ID, Status: rec.Status, Kind: d.Kind.Label(), Summary: rec.Summary, Uncertain: d.Uncertain}
 	if rec.Summary != "" {
 		res.Money, res.Currency, res.Time = d.Money, d.Currency, d.Time.In(s.Config.Location()).Format(TimeLayout)
+		res.Discount, res.Fee = d.Discount, d.Fee
 		m, _ := moneyOf(d, c)
 		res.Other, res.OtherCurrency = m.Other, m.OtherCurrency
 	}
@@ -322,7 +326,7 @@ const (
 	modeEdit
 )
 
-var fieldNames = map[string]string{"category": "分类", "asset": "账户", "target_asset": "转入账户", "time": "时间"}
+var fieldNames = map[string]string{"category": "分类", "asset": "账户", "target_asset": "转入账户", "time": "时间", "discount": "优惠", "fee": "手续费"}
 
 // settle writes a draft (or records why not) and stores the record. prev is
 // the draft before an edit; see write.
@@ -466,7 +470,7 @@ func billType(k recognize.Kind) int {
 }
 
 func billInput(d *recognize.Draft, c qianji.Catalog, m billMoney) qianji.BillInput {
-	in := qianji.BillInput{Type: billType(d.Kind), Money: m.Value, Currency: m.Currency, Time: d.Time, Remark: d.Merchant}
+	in := qianji.BillInput{Type: billType(d.Kind), Money: m.Value, Currency: m.Currency, Transfee: m.Transfee, Time: d.Time, Remark: d.Merchant}
 	if d.Kind.IsTransfer() {
 		from, _ := c.Asset(d.AssetID)
 		target, _ := c.Asset(d.TargetID)
@@ -819,9 +823,12 @@ type Patch struct {
 	TargetAsset string `json:"target_asset"`
 	Money       string `json:"money"`
 	// Other sets the other side of a two-currency bill (see Result.Other).
-	Other  string `json:"other"`
-	Time   string `json:"time"` // TimeLayout
-	Remark string `json:"remark"`
+	Other string `json:"other"`
+	// Discount and Fee set the discount and the transfer fee; "0" removes one.
+	Discount string `json:"discount"`
+	Fee      string `json:"fee"`
+	Time     string `json:"time"` // TimeLayout
+	Remark   string `json:"remark"`
 }
 
 // NoAsset is the picker entry for "no account".
@@ -917,6 +924,37 @@ func (s *Service) applyPatch(d *recognize.Draft, p Patch, c qianji.Catalog) (*re
 			out.Money = v
 		default:
 			out.Converted, out.ConvertedCurrency = v, m.OtherCurrency
+		}
+	}
+	part := func(name, s string) (string, error) {
+		v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+		if err != nil || v < 0 || v > 9999999999.99 {
+			return "", userErr(400, "%s不对：%s", name, s)
+		}
+		if v == 0 {
+			return "", nil
+		}
+		return strconv.FormatFloat(v, 'f', 2, 64), nil
+	}
+	if p.Discount != "" {
+		if out.Kind == recognize.KindIncome {
+			return nil, userErr(400, "收入没有优惠")
+		}
+		if out.Discount, err = part("优惠", p.Discount); err != nil {
+			return nil, err
+		}
+	}
+	if p.Fee != "" {
+		if !out.Kind.IsTransfer() {
+			return nil, userErr(400, "只有转账和还款能填手续费")
+		}
+		if out.Fee, err = part("手续费", p.Fee); err != nil {
+			return nil, err
+		}
+	}
+	if p.Discount != "" || p.Fee != "" {
+		if m, _ := moneyOf(&out, c); m.Currency != nil {
+			return nil, userErr(400, "涉及外币的账单不能填优惠和手续费，请直接改两边的金额")
 		}
 	}
 	if p.Time != "" {

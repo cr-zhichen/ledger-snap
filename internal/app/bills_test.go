@@ -50,6 +50,15 @@ func TestReconcile(t *testing.T) {
 			t.Fatalf("got %+v", got)
 		}
 	})
+	t.Run("discount added in app", func(t *testing.T) {
+		got, err := reconcile(d, ours, `{"id":1,"type":0,"money":25,"time":1767225600,"remark":"麦当劳","cateid":101,"assetid":201,"extra":{"transfee":-3}}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Money != "25.00" || got.Discount != "3.00" || got.Fee != "" {
+			t.Fatalf("got %+v", got)
+		}
+	})
 	t.Run("turned into a transfer", func(t *testing.T) {
 		got, err := reconcile(d, ours, `{"id":1,"type":2,"money":25,"time":1767225600,"remark":"麦当劳","cateid":-1,"assetid":-1,"fromid":201,"targetid":202}`)
 		if err != nil {

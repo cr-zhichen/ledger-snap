@@ -84,6 +84,19 @@ func (b qjBill) curr() *qjCurr {
 	return extra.Curr
 }
 
+// transfee is the bill's extra.transfee: a fee, or a discount as a negative
+// number; 0 for neither.
+func (b qjBill) transfee() float64 {
+	var extra struct {
+		Transfee json.Number `json:"transfee"`
+	}
+	if json.Unmarshal(b.Extra, &extra) != nil {
+		return 0
+	}
+	v, _ := extra.Transfee.Float64()
+	return v
+}
+
 // accounts returns the paying account and, for a transfer, the receiving one.
 func (b qjBill) accounts() (string, string) {
 	if k, _ := b.kind(); k.IsTransfer() {
@@ -96,7 +109,7 @@ func (b qjBill) accounts() (string, string) {
 // written.
 func sameMoney(a, b qjBill) bool {
 	ca, cb := a.curr(), b.curr()
-	if !sameAmount(a.Money, b.Money) || (ca == nil) != (cb == nil) {
+	if !sameAmount(a.Money, b.Money) || money(a.transfee()) != money(b.transfee()) || (ca == nil) != (cb == nil) {
 		return false
 	}
 	return ca == nil || ca.SS == cb.SS && ca.TS == cb.TS && ca.BS == cb.BS &&
@@ -115,12 +128,21 @@ func cents(n json.Number) string {
 }
 
 // setMoney copies the bill's amounts into a draft the way recognition fills
-// them: what was paid, and what it came to in the other currency.
+// them: what was paid, what it came to in the other currency, and the
+// discount or fee of a bill in the base currency (see adjust).
 func (b qjBill) setMoney(d *recognize.Draft) {
-	d.Converted, d.ConvertedCurrency = "", ""
+	d.Converted, d.ConvertedCurrency, d.Discount, d.Fee = "", "", "", ""
 	c := b.curr()
 	if c == nil {
-		d.Money, d.Currency = cents(b.Money), ""
+		paid, _ := b.Money.Float64()
+		k, _ := b.kind()
+		switch t := b.transfee(); {
+		case t > 0 && k.IsTransfer():
+			d.Fee, paid = money(t), paid+t
+		case t < 0 && (k == recognize.KindExpense || k.IsTransfer()):
+			d.Discount = money(-t)
+		}
+		d.Money, d.Currency = money(paid), ""
 		return
 	}
 	d.Money, d.Currency = cents(c.SV), c.SS

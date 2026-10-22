@@ -75,13 +75,13 @@ func TestMainStepSaysWhetherWritten(t *testing.T) {
 			name:   "written edit menu",
 			step:   editStep(&app.Result{RecordID: "r_1", Status: "written", Kind: "转账", Summary: "转账 100.00"}, ""),
 			prompt: "改哪一项？改完直接同步到钱迹\n已记账：转账 100.00",
-			opts:   []string{optBack, optAsset, optKind, optMoney, optTime, optText, optRefresh},
+			opts:   []string{optBack, optAsset, optKind, optMoney, optDiscount, optFee, optTime, optText, optRefresh},
 		},
 		{
 			name:   "held edit menu",
 			step:   editStep(&app.Result{RecordID: "r_1", Status: "needs_confirm", Kind: "转账", Summary: "转账 100.00"}, ""),
 			prompt: "改哪一项？\n还没记账：转账 100.00",
-			opts:   []string{optBack, optAsset, optKind, optMoney, optTime, optText, optRefresh},
+			opts:   []string{optBack, optAsset, optKind, optMoney, optDiscount, optFee, optTime, optText, optRefresh},
 		},
 	}
 	for _, tc := range cases {
