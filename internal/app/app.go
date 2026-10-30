@@ -199,15 +199,16 @@ func (s *Service) catalog(ctx context.Context, u *store.User) (qianji.Catalog, e
 
 // Result is what the shortcut receives.
 type Result struct {
-	RecordID         string   `json:"record_id"`
-	Status           string   `json:"status"`
-	Kind             string   `json:"kind,omitempty"` // 支出 | 收入 | 转账 | 信用卡还款
-	Summary          string   `json:"summary"`
-	Reason           string   `json:"reason,omitempty"`
-	Uncertain        []string `json:"uncertain,omitempty"`
-	WriteUnconfirmed bool     `json:"write_unconfirmed,omitempty"`
-	Money            string   `json:"money,omitempty"`
-	Currency         string   `json:"currency,omitempty"` // of Money; "" is the account's
+	Display          BillDisplay `json:"-"`
+	RecordID         string      `json:"record_id"`
+	Status           string      `json:"status"`
+	Kind             string      `json:"kind,omitempty"` // 支出 | 收入 | 转账 | 信用卡还款
+	Summary          string      `json:"summary"`
+	Reason           string      `json:"reason,omitempty"`
+	Uncertain        []string    `json:"uncertain,omitempty"`
+	WriteUnconfirmed bool        `json:"write_unconfirmed,omitempty"`
+	Money            string      `json:"money,omitempty"`
+	Currency         string      `json:"currency,omitempty"` // of Money; "" is the account's
 	// Other is the other side of a two-currency bill: what a transfer's
 	// target received, or what a foreign purchase cost in the account's
 	// currency.
@@ -223,7 +224,7 @@ type Result struct {
 const TimeLayout = "2006-01-02 15:04"
 
 func (s *Service) result(rec *store.Record, d *recognize.Draft, c qianji.Catalog) *Result {
-	res := &Result{RecordID: rec.ID, Status: rec.Status, Kind: d.Kind.Label(), Summary: rec.Summary, Uncertain: d.Uncertain, Reason: d.Reason, WriteUnconfirmed: rec.Status == "needs_confirm" && rec.BillID != ""}
+	res := &Result{Display: billDisplay(d, c, s.Config.Location()), RecordID: rec.ID, Status: rec.Status, Kind: d.Kind.Label(), Summary: rec.Summary, Uncertain: d.Uncertain, Reason: d.Reason, WriteUnconfirmed: rec.Status == "needs_confirm" && rec.BillID != ""}
 	if rec.Summary != "" {
 		res.Money, res.Currency, res.Time = d.Money, d.Currency, d.Time.In(s.Config.Location()).Format(TimeLayout)
 		res.Discount, res.Fee = d.Discount, d.Fee
