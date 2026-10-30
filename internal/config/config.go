@@ -26,13 +26,10 @@ func (d *Duration) UnmarshalText(text []byte) error {
 type Config struct {
 	Server     Server     `toml:"server"`
 	Qianji     Qianji     `toml:"qianji"`
-	OCR        OCR        `toml:"ocr"`
-	Rows       Rows       `toml:"rows"`
+	Extraction Extraction `toml:"extraction"`
 	OpenRouter OpenRouter `toml:"openrouter"`
 	Decision   Decision   `toml:"decision"`
 	TypeSafe   TypeSafe   `toml:"typesafe"`
-	Fallback   Fallback   `toml:"fallback"`
-	Correction Correction `toml:"correction"`
 	Recognize  Recognize  `toml:"recognize"`
 
 	// EnvOverrides lists the keys set from environment variables.
@@ -62,51 +59,15 @@ type Qianji struct {
 	SyncWait Duration `toml:"sync_wait"`
 }
 
-type OCR struct {
-	Provider string   `toml:"provider"`
-	Timeout  Duration `toml:"timeout"`
-	Volcano  Volcano  `toml:"volcano"`
-	Google   Google   `toml:"google"`
-	Baidu    Baidu    `toml:"baidu"`
-}
-
-type Volcano struct {
-	Endpoint     string `toml:"endpoint"`
-	Action       string `toml:"action"`
-	Version      string `toml:"version"`
-	Region       string `toml:"region"`
-	Service      string `toml:"service"`
-	AccessKeyEnv string `toml:"access_key_env"`
-	SecretKeyEnv string `toml:"secret_key_env"`
-	FilterThresh string `toml:"filter_thresh"`
-	MaxSide      int    `toml:"max_side"`
-}
-
-type Google struct {
-	Endpoint      string   `toml:"endpoint"`
-	APIKeyEnv     string   `toml:"api_key_env"`
-	Feature       string   `toml:"feature"`
-	LanguageHints []string `toml:"language_hints"`
-}
-
-type Baidu struct {
-	TokenURL     string `toml:"token_url"`
-	Endpoint     string `toml:"endpoint"`
-	APIKeyEnv    string `toml:"api_key_env"`
-	SecretKeyEnv string `toml:"secret_key_env"`
-}
-
-// Rows sorts OCR lines into labels and values with a fast text model, so that
-// a label and its value end up on one row even when their boxes do not line
-// up.
-type Rows struct {
-	Enabled         bool     `toml:"enabled"`
-	Model           string   `toml:"model"`
-	Provider        string   `toml:"provider"`
-	SchemaInPrompt  bool     `toml:"schema_in_prompt"`
-	ReasoningEffort string   `toml:"reasoning_effort"`
-	MaxTokens       int      `toml:"max_tokens"`
-	Timeout         Duration `toml:"timeout"`
+type Extraction struct {
+	Model           string `toml:"model"`
+	Provider        string `toml:"provider"`
+	SchemaInPrompt  bool   `toml:"schema_in_prompt"`
+	ReasoningEffort string `toml:"reasoning_effort"`
+	MaxTokens       int    `toml:"max_tokens"`
+	ImageMaxSide    int    `toml:"image_max_side"`
+	ImageMinSide    int    `toml:"image_min_side"`
+	JPEGQuality     int    `toml:"jpeg_quality"`
 }
 
 type OpenRouter struct {
@@ -125,43 +86,14 @@ type TypeSafe struct {
 }
 
 type Decision struct {
-	Provider      string     `toml:"provider"` // openrouter | typesafe
-	Model         string     `toml:"model"`
-	SendImage     bool       `toml:"send_image"`
-	ImageMaxSide  int        `toml:"image_max_side"`
-	ImageMinSide  int        `toml:"image_min_side"`
-	JPEGQuality   int        `toml:"jpeg_quality"`
-	MaxCandidates int        `toml:"max_candidates"`
-	Thresholds    Thresholds `toml:"thresholds"`
+	Provider   string     `toml:"provider"`
+	Model      string     `toml:"model"`
+	Thresholds Thresholds `toml:"thresholds"`
 }
 
-// Thresholds are the minimum probabilities for writing without falling back.
 type Thresholds struct {
-	Transaction float64 `toml:"transaction"`
-	Type        float64 `toml:"type"`
-	Amount      float64 `toml:"amount"`
-	Time        float64 `toml:"time"`
-	Category    float64 `toml:"category"`
-	Asset       float64 `toml:"asset"`
-}
-
-type Fallback struct {
-	Enabled bool `toml:"enabled"`
-	// Primary skips the decision model when recognizing: the fallback model
-	// reads every screenshot. Corrections still use the decision model.
-	Primary         bool   `toml:"primary"`
-	Model           string `toml:"model"`
-	Provider        string `toml:"provider"`
-	SchemaInPrompt  bool   `toml:"schema_in_prompt"`
-	ReasoningEffort string `toml:"reasoning_effort"`
-	MaxTokens       int    `toml:"max_tokens"`
-	ImageMaxSide    int    `toml:"image_max_side"`
-}
-
-type Correction struct {
-	Model           string `toml:"model"`
-	ReasoningEffort string `toml:"reasoning_effort"`
-	MaxTokens       int    `toml:"max_tokens"`
+	Category float64 `toml:"category"`
+	Asset    float64 `toml:"asset"`
 }
 
 type Recognize struct {
@@ -188,15 +120,11 @@ func Load(path string) (*Config, error) {
 	if c.Decision.Provider != "openrouter" && c.Decision.Provider != "typesafe" {
 		return nil, fmt.Errorf("decision.provider 只能是 openrouter 或 typesafe")
 	}
-	// Jev allows 255 options per choice question; one is the "none" option.
-	if c.Decision.MaxCandidates < 1 || c.Decision.MaxCandidates > 254 {
-		return nil, fmt.Errorf("decision.max_candidates 必须在 1 到 254 之间")
-	}
 	if _, err := time.LoadLocation(c.Recognize.Timezone); err != nil {
 		return nil, fmt.Errorf("recognize.timezone 无效: %w", err)
 	}
-	if c.Fallback.Primary && !c.Fallback.Enabled {
-		return nil, fmt.Errorf("fallback.primary 要求 fallback.enabled = true")
+	if c.Extraction.Model == "" || c.Extraction.MaxTokens <= 0 || c.Extraction.ImageMaxSide <= 0 || c.Extraction.JPEGQuality < 1 || c.Extraction.JPEGQuality > 100 {
+		return nil, fmt.Errorf("请填写有效的 extraction 模型、输出长度和图片设置")
 	}
 	if c.Qianji.SyncWait.Duration <= 0 {
 		return nil, fmt.Errorf("qianji.sync_wait 必须大于 0")

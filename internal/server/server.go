@@ -27,6 +27,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("POST /v1/login", s.login)
 	mux.HandleFunc("POST /v1/recognize", s.auth(s.recognize))
+	mux.HandleFunc("GET /v1/batches/{id}", s.auth(s.batch))
 	mux.HandleFunc("POST /v1/records/{id}/confirm", s.auth(s.confirm))
 	mux.HandleFunc("POST /v1/records/{id}/correct", s.auth(s.correct))
 	mux.HandleFunc("POST /v1/records/{id}/update", s.auth(s.update))
@@ -94,7 +95,20 @@ func (s *Server) recognize(w http.ResponseWriter, r *http.Request, u *store.User
 		return
 	}
 	res, err := s.App.Recognize(r.Context(), u, image, upload)
-	s.reply(w, r, res, err)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, 200, res)
+}
+
+func (s *Server) batch(w http.ResponseWriter, r *http.Request, u *store.User) {
+	result, err := s.App.BatchCurrent(r.Context(), u, r.PathValue("id"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, 200, result)
 }
 
 // readImage takes the screenshot from a multipart "image" field or, as the
@@ -158,7 +172,7 @@ func (s *Server) update(w http.ResponseWriter, r *http.Request, u *store.User) {
 	body := readBody(r)
 	p := app.Patch{}
 	for name, dst := range map[string]*string{"kind": &p.Kind, "category": &p.Category, "asset": &p.Asset,
-		"target_asset": &p.TargetAsset, "money": &p.Money, "other": &p.Other, "time": &p.Time, "remark": &p.Remark} {
+		"target_asset": &p.TargetAsset, "money": &p.Money, "other": &p.Other, "time": &p.Time, "remark": &p.Remark, "discount": &p.Discount, "fee": &p.Fee} {
 		*dst = strings.TrimSpace(field(r, body, name))
 	}
 	res, err := s.App.Update(r.Context(), u, r.PathValue("id"), p)

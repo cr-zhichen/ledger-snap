@@ -1,8 +1,9 @@
 package recognize
 
 import (
-	"regexp"
 	"strings"
+
+	"ledger-snap/internal/qianji"
 )
 
 // Dollar marks a bare "$", which can be any dollar. finishCurrency resolves
@@ -34,15 +35,6 @@ var currencyWords = map[string]string{
 // dollars are the currencies a bare "$" may stand for.
 var dollars = map[string]bool{"USD": true, "HKD": true, "TWD": true, "SGD": true, "AUD": true, "CAD": true, "NZD": true, "MOP": true}
 
-var (
-	// Longer markers come first so "HK$" wins over "$" and "港元" over "元".
-	currencyBefore = regexp.MustCompile(`(?:^|[^A-Za-z])(MOP\$|US\$|HK\$|NT\$|JP¥|J¥|S\$|A\$|C\$|\$|¥|￥|€|£|₩|฿|RMB|[A-Z]{3})\s*$`)
-	currencyAfter  = regexp.MustCompile(`^\s*(新加坡元|瑞士法郎|新台币|澳门元|澳门币|人民币|港元|港币|美元|日元|欧元|英镑|澳元|加元|新币|韩元|泰铢|円|元|RMB|[A-Z]{3})(?:$|[^A-Za-z])`)
-	// currencyInRow finds currency names anywhere in a row, e.g. "币种：美元"
-	// or "入账金额(人民币)"; a bare "元" is too common to count here.
-	currencyInRow = regexp.MustCompile(`(新加坡元|瑞士法郎|新台币|澳门元|澳门币|人民币|港元|港币|美元|日元|欧元|英镑|澳元|加元|韩元|泰铢)|(?:^|[^A-Za-z])(RMB|[A-Z]{3})(?:$|[^A-Za-z])`)
-)
-
 // CurrencyCode maps a marker or name ("HK$", "美元", "usd") to its code, or
 // "" when it is not one.
 func CurrencyCode(s string) string {
@@ -54,33 +46,6 @@ func CurrencyCode(s string) string {
 		return s
 	}
 	return ""
-}
-
-// amountCurrency reads the currency written right before or after an amount
-// in its line (adjacent), then falls back to the only currency named in the
-// row.
-func amountCurrency(before, after, row string) (code string, adjacent bool) {
-	if m := currencyBefore.FindStringSubmatch(before); m != nil {
-		if c := CurrencyCode(m[1]); c != "" {
-			return c, true
-		}
-	}
-	if m := currencyAfter.FindStringSubmatch(after); m != nil {
-		if c := CurrencyCode(m[1]); c != "" {
-			return c, true
-		}
-	}
-	for _, m := range currencyInRow.FindAllStringSubmatch(row, -1) {
-		c := CurrencyCode(m[1] + m[2])
-		if c == "" {
-			continue
-		}
-		if code != "" && code != c {
-			return "", false
-		}
-		code = c
-	}
-	return code, false
 }
 
 // resolveDollar picks the dollar a bare "$" means, given the currencies of
@@ -95,4 +60,24 @@ func resolveDollar(code string, accounts ...string) string {
 		}
 	}
 	return "USD"
+}
+
+// finishCurrency resolves a bare "$" against the accounts' currencies. A
+// detected currency is kept even when it matches the account, so switching
+// to another account later does not change what was paid.
+func finishCurrency(d *Draft, c qianji.Catalog) {
+	if d.Status != "ok" {
+		return
+	}
+	var accounts []string
+	for _, id := range []string{d.AssetID, d.TargetID} {
+		if cur, ok := c.AssetCurrency(id); ok {
+			accounts = append(accounts, cur)
+		}
+	}
+	d.Currency = resolveDollar(d.Currency, accounts...)
+	d.ConvertedCurrency = resolveDollar(d.ConvertedCurrency, accounts...)
+	if d.Converted == "" {
+		d.ConvertedCurrency = ""
+	}
 }

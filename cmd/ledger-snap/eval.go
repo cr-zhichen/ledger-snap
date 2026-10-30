@@ -14,14 +14,13 @@ import (
 	"time"
 
 	"ledger-snap/internal/config"
-	"ledger-snap/internal/ocr"
 	"ledger-snap/internal/qianji"
 	"ledger-snap/internal/recognize"
 )
 
-// label is the expected result for one screenshot. Empty fields are not checked.
+// label is one expected transaction. Empty fields are not checked.
 type label struct {
-	Status   string `json:"status"` // ok | rejected
+	Status   string `json:"status"` // ok
 	Kind     string `json:"kind"`
 	Money    string `json:"money"`
 	Category string `json:"category"` // category path, e.g. "三餐"
@@ -37,8 +36,8 @@ type label struct {
 }
 
 type labelFile struct {
-	UploadTime string           `json:"upload_time"` // 2006-01-02 15:04
-	Images     map[string]label `json:"images"`
+	UploadTime string             `json:"upload_time"` // 2006-01-02 15:04
+	Images     map[string][]label `json:"images"`
 }
 
 // runEval checks recognition against labels.json without writing to Qianji.
@@ -47,7 +46,6 @@ func runEval(ctx context.Context, args []string) error {
 	cfgPath := fs.String("config", "config.toml", "配置文件")
 	labelsPath := fs.String("labels", "testdata/screens/labels.json", "标注文件，图片路径相对于它所在的目录")
 	out := fs.String("out", "", "把每张截图的完整识别过程写到这个目录")
-	ocrCache := fs.String("ocr-cache", "", "OCR 结果缓存目录：有缓存就直接用，没有就识别后存进去；对比决策模型时 OCR 只跑一次")
 	var o overrides
 	o.register(fs)
 	_ = fs.Parse(args)
@@ -76,11 +74,8 @@ func runEval(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	for _, dir := range []string{*out, *ocrCache} {
-		if dir == "" {
-			continue
-		}
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+	if *out != "" {
+		if err := os.MkdirAll(*out, 0o700); err != nil {
 			return err
 		}
 	}
@@ -89,71 +84,60 @@ func runEval(ctx context.Context, args []string) error {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	rows := "按位置"
-	if cfg.Rows.Enabled {
-		rows = cfg.Rows.Model
-	}
-	fmt.Printf("OCR=%s 分行=%s 决策=%s 兜底=%s（启用=%v）\n\n", cfg.OCR.Provider, rows, cfg.Decision.Model, cfg.Fallback.Model, cfg.Fallback.Enabled)
+	fmt.Printf("提取=%s 匹配=%s\n", cfg.Extraction.Model, cfg.Decision.Model)
 	fields := []string{"status", "kind", "money", "currency", "converted", "discount", "fee", "category", "asset", "target_asset", "time", "merchant"}
 	right, checked := map[string]int{}, map[string]int{}
-	var totals, rowsMs []int64
-	cost, fallbacks, rowsFailed := 0.0, 0, 0
+	var totals []int64
+	cost := 0.0
+	failed := 0
 	for _, name := range names {
 		want := lf.Images[name]
 		image, err := os.ReadFile(filepath.Join(filepath.Dir(*labelsPath), name))
 		if err != nil {
 			return err
 		}
-		lines, took, err := cachedOCR(ctx, rec.OCR, *ocrCache, name, image)
-		if err != nil {
-			fmt.Printf("✗ %s 失败：%v\n", name, err)
-			continue
-		}
-		draft, trace, err := rec.Recognize(ctx, recognize.Input{Image: image, UploadTime: upload, Catalog: catalog, Lines: lines})
-		if err != nil {
-			fmt.Printf("✗ %s 失败：%v\n", name, err)
-			continue
-		}
-		// OCR that ran for the cache did not run in Recognize; count it there.
-		trace.OCRMs += took.Milliseconds()
-		trace.TotalMs += took.Milliseconds()
-		totals = append(totals, trace.TotalMs)
-		if trace.RowsModel != "" {
-			rowsMs = append(rowsMs, trace.RowsMs)
-		}
-		if trace.RowsError != "" {
-			rowsFailed++
+		drafts, trace, err := rec.Recognize(ctx, recognize.Input{Image: image, UploadTime: upload, Catalog: catalog})
+		if *out != "" {
+			if saveErr := writeJSON(filepath.Join(*out, strings.TrimSuffix(name, filepath.Ext(name))+".json"), map[string]any{"drafts": drafts, "trace": trace}); saveErr != nil {
+				return saveErr
+			}
 		}
 		cost += trace.Cost
-		if trace.FallbackWhy != "" {
-			fallbacks++
+		if err != nil {
+			failed++
+			fmt.Printf("✗ %s 失败：%v\n", name, err)
+			continue
 		}
-		got := actual(draft, catalog, cfg)
+		totals = append(totals, trace.TotalMs)
 		var wrong []string
-		for _, f := range fields {
-			w := field(want, f)
-			if w == "" {
-				continue
-			}
-			checked[f]++
-			ok := got[f] == w
-			if f == "merchant" {
-				ok = strings.Contains(got[f], w)
-			}
-			if ok {
-				right[f]++
-			} else {
-				wrong = append(wrong, fmt.Sprintf("%s=%q（应为 %q）", f, got[f], w))
+		if len(drafts) != len(want) {
+			wrong = append(wrong, fmt.Sprintf("笔数=%d（应为 %d）", len(drafts), len(want)))
+		}
+		for i := 0; i < min(len(drafts), len(want)); i++ {
+			got := actual(drafts[i], catalog, cfg)
+			for _, f := range fields {
+				w := field(want[i], f)
+				if w == "" {
+					continue
+				}
+				checked[f]++
+				ok := got[f] == w
+				if f == "merchant" {
+					ok = strings.Contains(got[f], w)
+				}
+				if ok {
+					right[f]++
+				} else {
+					wrong = append(wrong, fmt.Sprintf("第%d笔 %s=%q（应为 %q）", i+1, f, got[f], w))
+				}
 			}
 		}
 		mark := "✓"
 		if len(wrong) > 0 {
+			failed++
 			mark = "✗"
 		}
 		fmt.Printf("%s %-28s %5dms %s\n", mark, name, trace.TotalMs, strings.Join(wrong, "，"))
-		if *out != "" {
-			_ = writeJSON(filepath.Join(*out, strings.TrimSuffix(name, filepath.Ext(name))+".json"), map[string]any{"draft": draft, "trace": trace})
-		}
 	}
 	fmt.Println("\n字段准确率：")
 	for _, f := range fields {
@@ -163,39 +147,12 @@ func runEval(ctx context.Context, args []string) error {
 	}
 	slices.Sort(totals)
 	if n := len(totals); n > 0 {
-		fmt.Printf("耗时 p50=%dms p95=%dms；走兜底 %d/%d；总费用 $%.5f\n", totals[n/2], totals[min(n-1, n*95/100)], fallbacks, n, cost)
+		fmt.Printf("耗时 p50=%dms p95=%dms；总费用 $%.5f\n", totals[n/2], totals[min(n-1, n*95/100)], cost)
 	}
-	slices.Sort(rowsMs)
-	if n := len(rowsMs); n > 0 {
-		fmt.Printf("分行 p50=%dms p95=%dms；失败 %d/%d，失败时按位置分行\n", rowsMs[n/2], rowsMs[min(n-1, n*95/100)], rowsFailed, n)
+	if failed > 0 {
+		return fmt.Errorf("%d 张截图未通过评测", failed)
 	}
 	return nil
-}
-
-// cachedOCR returns the cached OCR lines of an image, running OCR and caching
-// them on a miss, and how long OCR took (0 on a hit). It runs OCR the way
-// Recognize does, retrying when rate limited. An empty dir means no cache:
-// nil lets Recognize run OCR.
-func cachedOCR(ctx context.Context, engine ocr.Engine, dir, name string, image []byte) ([]ocr.Line, time.Duration, error) {
-	if dir == "" {
-		return nil, 0, nil
-	}
-	path := filepath.Join(dir, engine.Name()+"_"+strings.TrimSuffix(name, filepath.Ext(name))+".json")
-	if data, err := os.ReadFile(path); err == nil {
-		var lines []ocr.Line
-		if err := json.Unmarshal(data, &lines); err != nil {
-			return nil, 0, fmt.Errorf("OCR 缓存 %s: %w", path, err)
-		}
-		return lines, 0, nil
-	}
-	lines, took, err := ocr.Timed(ctx, engine, image)
-	if err != nil {
-		return nil, took, err
-	}
-	if lines == nil {
-		lines = []ocr.Line{} // nil would make Recognize run OCR again
-	}
-	return lines, took, writeJSON(path, lines)
 }
 
 func field(l label, name string) string {

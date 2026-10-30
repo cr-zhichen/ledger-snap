@@ -47,6 +47,18 @@ CREATE TABLE IF NOT EXISTS records (
 	summary    TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS records_uid_time ON records(uid, created_at);
+CREATE TABLE IF NOT EXISTS recognition_batches (
+ id TEXT PRIMARY KEY,
+ uid TEXT NOT NULL,
+ created_at INTEGER NOT NULL,
+ reason TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS recognition_items (
+ batch_id TEXT NOT NULL REFERENCES recognition_batches(id),
+ record_id TEXT NOT NULL UNIQUE REFERENCES records(id),
+ position INTEGER NOT NULL,
+ PRIMARY KEY (batch_id, position)
+);
 CREATE TABLE IF NOT EXISTS asset_aliases (
 	uid        TEXT NOT NULL,
 	pattern    TEXT NOT NULL,
@@ -191,8 +203,14 @@ func scanRecord(row interface{ Scan(...any) error }) (*Record, error) {
 	return &r, err
 }
 
-func (s *Store) SaveRecord(ctx context.Context, r *Record) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO records (`+recordColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+type recordWriter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func (s *Store) SaveRecord(ctx context.Context, r *Record) error { return saveRecord(ctx, s.db, r) }
+
+func saveRecord(ctx context.Context, db recordWriter, r *Record) error {
+	_, err := db.ExecContext(ctx, `INSERT INTO records (`+recordColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET status = excluded.status, image_path = excluded.image_path, draft = excluded.draft,
 			trace = excluded.trace, bill_id = excluded.bill_id, bill = excluded.bill, summary = excluded.summary`,
 		r.ID, r.UID, r.CreatedAt, r.Status, r.ImagePath, r.Draft, r.Trace, r.BillID, r.Bill, r.Summary)

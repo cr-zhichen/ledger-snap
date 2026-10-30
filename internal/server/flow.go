@@ -95,33 +95,120 @@ func (s *Server) flowRecognize(w http.ResponseWriter, r *http.Request, u *store.
 		s.failStep(w, r, err)
 		return
 	}
-	writeJSON(w, 200, mainStep(res, ""))
+	writeJSON(w, 200, batchStep(res, ""))
 }
 
 func (s *Server) flowStep(w http.ResponseWriter, r *http.Request, u *store.User) {
 	ctx, id := r.Context(), r.PathValue("id")
-	step, err := s.advance(ctx, u, id, strings.SplitN(r.PathValue("step"), "/", 3), flowValue(r))
-	if err == nil {
-		writeJSON(w, 200, step)
+	value := flowValue(r)
+	if r.PathValue("step") == "batch" {
+		batch, err := s.App.BatchCurrent(ctx, u, id)
+		if err != nil {
+			s.failStep(w, r, err)
+			return
+		}
+		if value == optDone {
+			writeJSON(w, 200, done(batchSummary(batch)))
+			return
+		}
+		for i, item := range batch.Records {
+			if value == batchOption(i, item) {
+				step := mainStep(item, "")
+				if step.Action == "done" {
+					step = batchStep(batch, step.Message)
+				} else {
+					step = withBatch(step, id)
+				}
+				writeJSON(w, 200, step)
+				return
+			}
+		}
+		writeJSON(w, 200, batchStep(batch, ""))
 		return
 	}
-	var ue *app.UserError
-	if errors.As(err, &ue) && (ue.Status == http.StatusUnauthorized || ue.Status == http.StatusNotFound) {
-		s.failStep(w, r, err)
-		return
+	batchID := r.URL.Query().Get("batch")
+	if batchID != "" {
+		batch, err := s.App.BatchCurrent(ctx, u, batchID)
+		if err != nil {
+			s.failStep(w, r, err)
+			return
+		}
+		if !slices.ContainsFunc(batch.Records, func(item *app.Result) bool { return item.RecordID == id }) {
+			s.failStep(w, r, &app.UserError{Status: 404, Message: "找不到这笔账单"})
+			return
+		}
+		if value == optBatch {
+			writeJSON(w, 200, batchStep(batch, ""))
+			return
+		}
 	}
-	// A failed step leaves the record as it was: show it again with the
-	// reason, so the user can try something else.
-	cur, cerr := s.App.Current(ctx, u, id)
-	if cerr != nil {
-		s.failStep(w, r, err)
-		return
+	step, err := s.advance(ctx, u, id, strings.SplitN(r.PathValue("step"), "/", 3), value)
+	if err != nil {
+		var ue *app.UserError
+		if errors.As(err, &ue) && (ue.Status == http.StatusUnauthorized || ue.Status == http.StatusNotFound) {
+			s.failStep(w, r, err)
+			return
+		}
+		cur, cerr := s.App.Current(ctx, u, id)
+		if cerr != nil {
+			s.failStep(w, r, err)
+			return
+		}
+		step = mainStep(cur, "没成功："+s.message(r, err))
 	}
-	failed := "没改成："
-	if r.PathValue("step") == "main" {
-		failed = "没成功："
+	if batchID != "" {
+		if step.Action == "done" {
+			batch, err := s.App.BatchCurrent(ctx, u, batchID)
+			if err != nil {
+				s.failStep(w, r, err)
+				return
+			}
+			if len(batch.Records) > 1 {
+				step = batchStep(batch, step.Message)
+			}
+		} else {
+			step = withBatch(step, batchID)
+		}
 	}
-	writeJSON(w, 200, mainStep(cur, failed+s.message(r, err)))
+	writeJSON(w, 200, step)
+}
+
+const optBatch = "返回账单列表"
+
+func batchOption(i int, res *app.Result) string { return fmt.Sprintf("%d. %s", i+1, state(res)) }
+func batchSummary(batch *app.BatchResult) string {
+	written, pending := 0, 0
+	for _, r := range batch.Records {
+		if r.Status == "written" {
+			written++
+		}
+		if r.Status == "needs_confirm" {
+			pending++
+		}
+	}
+	return fmt.Sprintf("已记账 %d 笔，待确认 %d 笔", written, pending)
+}
+func batchStep(batch *app.BatchResult, note string) *Step {
+	if len(batch.Records) == 0 {
+		return done(withNote(note, "没有记账："+batch.Reason))
+	}
+	if len(batch.Records) == 1 {
+		return mainStep(batch.Records[0], note)
+	}
+	opts := []string{optDone}
+	for i, item := range batch.Records {
+		opts = append(opts, batchOption(i, item))
+	}
+	return choose(withNote(note, batchSummary(batch)+"，选择一笔查看或修改"), opts, batch.BatchID, "batch")
+}
+func withBatch(step *Step, id string) *Step {
+	if step.Next != "" {
+		if strings.HasSuffix(step.Next, "/main") && !slices.Contains(step.Options, optBatch) {
+			step.Options = append(step.Options, optBatch)
+		}
+		step.Next += "?batch=" + url.QueryEscape(id)
+	}
+	return step
 }
 
 // failStep ends the run with an error message; an auth failure also makes the
@@ -271,10 +358,11 @@ func (s *Server) mainChoice(ctx context.Context, u *store.User, id, value string
 	case optEdit:
 		return editStep(cur, ""), nil
 	case optRemove, optDiscard:
-		if _, err := s.App.Delete(ctx, u, id); err != nil {
+		deleted, err := s.App.Delete(ctx, u, id)
+		if err != nil {
 			return nil, err
 		}
-		if cur.Status == "written" {
+		if deleted.Status == "deleted" {
 			return done("已从钱迹删除这笔账"), nil
 		}
 		return done("已放弃，这笔没有记账"), nil
@@ -450,6 +538,8 @@ func state(res *app.Result) string {
 	switch {
 	case res.Status == "written":
 		return "已记账：" + res.Summary
+	case res.WriteUnconfirmed:
+		return "记账结果未确认，请重新确认或放弃\n" + res.Summary
 	case res.Reason == "":
 		return "还没记账：" + res.Summary
 	}
