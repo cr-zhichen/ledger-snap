@@ -26,12 +26,14 @@ import (
 // routes. Every pull returns all bills and every deletion so far, which is
 // what an incremental pull returns when everything changed.
 type fakeQianji struct {
-	mu      sync.Mutex
-	bills   map[string]map[string]any
-	deleted []json.Number
-	writes  []map[string]any // bills sent to /bill/syncall
-	pulls   int
-	onPull  func(n int) // runs before pull n answers
+	failMoney      string
+	failAfterWrite bool
+	mu             sync.Mutex
+	bills          map[string]map[string]any
+	deleted        []json.Number
+	writes         []map[string]any // bills sent to /bill/syncall
+	pulls          int
+	onPull         func(n int) // runs before pull n answers
 }
 
 func (f *fakeQianji) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +71,12 @@ func (f *fakeQianji) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		for _, bill := range v.Bills.Changes {
+			if f.failMoney != "" && fmt.Sprint(bill["money"]) == f.failMoney {
+				http.Error(w, "simulated write failure", http.StatusServiceUnavailable)
+				return
+			}
+		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		created, deleted := []json.Number{}, []json.Number{}
@@ -84,6 +92,10 @@ func (f *fakeQianji) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.bills[id] = b
 			f.writes = append(f.writes, b)
 			created = append(created, json.Number(id))
+		}
+		if f.failAfterWrite {
+			http.Error(w, "simulated lost write response", http.StatusBadGateway)
+			return
 		}
 		reply(map[string]any{"sync_result": map[string]any{"bill": map[string]any{
 			"new_ids": created, "update_ids": []any{}, "del_ids": deleted, "conf_ids": []any{}, "has_failed": 0}}})

@@ -7,26 +7,8 @@ import (
 	"ledger-snap/internal/openrouter"
 )
 
-// chatModel is how to call a chat model for JSON output.
-type chatModel struct {
-	Model, Provider, ReasoningEffort string
-	// SchemaInPrompt puts the JSON schema in the prompt, for providers that
-	// cannot be held to one.
-	SchemaInPrompt bool
-	MaxTokens      int
-}
-
-func rowsModel(c config.Rows) chatModel {
-	return chatModel{Model: c.Model, Provider: c.Provider, ReasoningEffort: c.ReasoningEffort, SchemaInPrompt: c.SchemaInPrompt, MaxTokens: c.MaxTokens}
-}
-
-func fallbackModel(c config.Fallback) chatModel {
-	return chatModel{Model: c.Model, Provider: c.Provider, ReasoningEffort: c.ReasoningEffort, SchemaInPrompt: c.SchemaInPrompt, MaxTokens: c.MaxTokens}
-}
-
-// request asks for JSON matching schema about the text and, when given, an
-// image.
-func (m chatModel) request(name string, schema map[string]any, text string, image []byte) openrouter.ChatRequest {
+// extractionRequest asks for JSON about text and, when given, an image.
+func extractionRequest(m config.Extraction, name string, schema map[string]any, text string, image []byte) openrouter.ChatRequest {
 	if m.SchemaInPrompt {
 		b, _ := json.Marshal(schema)
 		text += "\n\n只输出一个 JSON 对象，符合这个 JSON Schema：\n" + string(b)

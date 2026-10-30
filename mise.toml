@@ -35,7 +35,7 @@ depends = ["build"]
 run = "set -a && . ./.env.local && set +a && ./bin/ledger-snap qianji-smoke"
 
 [tasks.eval]
-description = "按 testdata/screens/labels.json 评测识别效果；参数放在 -- 之后，例如 --provider baidu"
+description = "按 testdata/screens/labels.json 评测识别效果；参数放在 -- 之后，例如 --extraction-model qwen/qwen3.8-27b"
 depends = ["build"]
 run = "set -a && . ./.env.local && set +a && harmonia exec -- ./bin/ledger-snap eval"
 

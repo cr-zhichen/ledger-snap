@@ -9,65 +9,28 @@ import (
 	"time"
 
 	"ledger-snap/internal/config"
-	"ledger-snap/internal/ocr"
 	"ledger-snap/internal/openrouter"
 	"ledger-snap/internal/qianji"
 	"ledger-snap/internal/recognize"
 	"ledger-snap/internal/typesafe"
 )
 
-type overrides struct {
-	provider, rowsModel, decisionProvider, decisionModel, fallbackModel string
-	noRows, noImage, noFallback, forceFallback                          bool
-}
+type overrides struct{ extractionModel, decisionModel string }
 
 func (o *overrides) register(fs *flag.FlagSet) {
-	fs.StringVar(&o.provider, "provider", "", "覆盖 ocr.provider")
-	fs.StringVar(&o.rowsModel, "rows-model", "", "覆盖 rows.model")
-	fs.BoolVar(&o.noRows, "no-rows", false, "不用模型分行，按文字框的位置分行")
-	fs.StringVar(&o.decisionProvider, "decision-provider", "", "覆盖 decision.provider（openrouter 或 typesafe）")
-	fs.StringVar(&o.decisionModel, "decision-model", "", "覆盖 decision.model")
-	fs.StringVar(&o.fallbackModel, "fallback-model", "", "覆盖 fallback.model")
-	fs.BoolVar(&o.noImage, "no-image", false, "决策模型只看 OCR 文字，不看截图")
-	fs.BoolVar(&o.noFallback, "no-fallback", false, "关闭视觉 LLM 兜底")
-	fs.BoolVar(&o.forceFallback, "force-fallback", false, "把阈值调到最高，让每张截图都走兜底")
+	fs.StringVar(&o.extractionModel, "extraction-model", "", "图片提取模型")
+	fs.StringVar(&o.decisionModel, "decision-model", "", "账户和分类匹配模型")
 }
-
 func (o *overrides) apply(cfg *config.Config) {
-	if o.provider != "" {
-		cfg.OCR.Provider = o.provider
-	}
-	if o.rowsModel != "" {
-		cfg.Rows.Model = o.rowsModel
-	}
-	if o.noRows {
-		cfg.Rows.Enabled = false
-	}
-	if o.decisionProvider != "" {
-		cfg.Decision.Provider = o.decisionProvider
+	if o.extractionModel != "" {
+		cfg.Extraction.Model = o.extractionModel
 	}
 	if o.decisionModel != "" {
 		cfg.Decision.Model = o.decisionModel
 	}
-	if o.fallbackModel != "" {
-		cfg.Fallback.Model = o.fallbackModel
-	}
-	if o.noImage {
-		cfg.Decision.SendImage = false
-	}
-	if o.noFallback {
-		cfg.Fallback.Enabled = false
-	}
-	if o.forceFallback {
-		cfg.Decision.Thresholds.Transaction, cfg.Decision.Thresholds.Type = 1.01, 1.01
-	}
 }
 
 func newRecognizer(cfg *config.Config) (*recognize.Recognizer, error) {
-	engine, err := ocr.New(cfg.OCR, "")
-	if err != nil {
-		return nil, err
-	}
 	key, err := config.Secret(cfg.OpenRouter.APIKeyEnv)
 	if err != nil {
 		return nil, err
@@ -81,7 +44,7 @@ func newRecognizer(cfg *config.Config) (*recognize.Recognizer, error) {
 		}
 		decider = typesafe.New(cfg.TypeSafe.BaseURL, tsKey, cfg.TypeSafe.InputPricePerMTok, cfg.TypeSafe.Timeout.Duration)
 	}
-	return &recognize.Recognizer{Config: cfg, OCR: engine, Decider: decider, Router: router}, nil
+	return &recognize.Recognizer{Config: cfg, Decider: decider, Router: router}, nil
 }
 
 // testCatalog logs in with the test account and loads its catalog.
@@ -146,29 +109,21 @@ func runRecognize(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		draft, trace, err := rec.Recognize(ctx, recognize.Input{Image: image, UploadTime: upload, Catalog: catalog})
+		drafts, trace, err := rec.Recognize(ctx, recognize.Input{Image: image, UploadTime: upload, Catalog: catalog})
 		fmt.Printf("== %s\n", path)
 		if err != nil {
 			fmt.Println("失败:", err)
 			continue
 		}
-		fmt.Println(summary(draft, catalog))
-		fmt.Printf("   OCR %dms · 分行 %dms · 决策 %dms · 兜底 %dms · 合计 %dms · $%.5f", trace.OCRMs, trace.RowsMs, trace.DecisionMs, trace.FallbackMs, trace.TotalMs, trace.Cost)
-		if trace.FallbackWhy != "" {
-			fmt.Printf(" · 兜底原因：%s", trace.FallbackWhy)
+		if len(drafts) == 0 {
+			fmt.Println("没有识别到可记账的交易：" + trace.Extraction.Reason)
 		}
-		if trace.RowsError != "" {
-			fmt.Printf(" · 分行错误：%s", trace.RowsError)
+		for i, draft := range drafts {
+			fmt.Printf("%d. %s\n", i+1, summary(draft, catalog))
 		}
-		if trace.DecisionError != "" {
-			fmt.Printf(" · 决策错误：%s", trace.DecisionError)
-		}
-		if trace.FallbackError != "" {
-			fmt.Printf(" · 兜底错误：%s", trace.FallbackError)
-		}
-		fmt.Println()
+		fmt.Printf("   提取 %dms · 匹配 %dms · 合计 %dms · $%.5f\n", trace.ExtractionMs, trace.DecisionMs, trace.TotalMs, trace.Cost)
 		if *verbose {
-			_ = printJSON(trace)
+			_ = printJSON(map[string]any{"drafts": drafts, "trace": trace})
 		}
 	}
 	return nil
@@ -201,6 +156,6 @@ func summary(d *recognize.Draft, catalog qianji.Catalog) string {
 	if d.Converted != "" {
 		money += " / " + strings.TrimSpace(d.Converted+" "+d.ConvertedCurrency)
 	}
-	return fmt.Sprintf("%s %s · %s · %s · %s · %s [%s]", d.Kind.Label(), money,
-		mark("category", category), mark("asset", asset), mark("time", d.Time.In(d.Time.Location()).Format("01-02 15:04")), d.Merchant, d.Source)
+	return fmt.Sprintf("%s %s · %s · %s · %s · %s", d.Kind.Label(), money,
+		mark("category", category), mark("asset", asset), mark("time", d.Time.In(d.Time.Location()).Format("01-02 15:04")), d.Merchant)
 }

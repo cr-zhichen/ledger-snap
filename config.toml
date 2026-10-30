@@ -23,53 +23,21 @@ catalog_ttl = "6h"
 # 修改已记的账之前，先从钱迹同步账单，免得覆盖在 App 里做的改动；最多等这么久，超时就不改
 sync_wait = "5s"
 
-[ocr]
-# volcano | google | baidu
-provider = "volcano"
-timeout = "15s"
-
-[ocr.volcano]
-endpoint = "https://visual.volcengineapi.com"
-# 多语种 OCR；改用通用文字识别时填 OCRNormal / 2020-08-26
-action = "MultiLanguageOCR"
-version = "2022-08-31"
-# 多语种 OCR 要求图片每边不超过 2048 像素，超出时先缩小
-max_side = 2048
-region = "cn-north-1"
-service = "cv"
-access_key_env = "VOLCANO_OCR_ACCESS_KEY"
-secret_key_env = "VOLCANO_OCR_SECRET_KEY"
-# 置信度低于这个分数的文本行会被过滤，0~100
-filter_thresh = "60"
-
-[ocr.google]
-endpoint = "https://vision.googleapis.com/v1/images:annotate"
-api_key_env = "GOOGLE_OCR_API_KEY"
-# TEXT_DETECTION | DOCUMENT_TEXT_DETECTION
-feature = "DOCUMENT_TEXT_DETECTION"
-language_hints = ["zh", "en"]
-
-[ocr.baidu]
-token_url = "https://aip.baidubce.com/oauth/2.0/token"
-# accurate 为高精度含位置版，general 为标准含位置版
-endpoint = "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate"
-api_key_env = "BAIDU_OCR_API_KEY"
-secret_key_env = "BAIDU_OCR_SECRET_KEY"
-
-# OCR 之后用一个快的文本模型把文字行整理成“标签 + 值”：框高低不齐、标签在上或在下、值折成几行，
-# 都归成一行，标签在前。模型只给出行号，不改文字；关闭、出错或超时时按文字框的位置分行。
-# 2026-10-22 用 12 张截图的原样、错位、上下排三个版本对比，Qwen3.8 27B 在 Cerebras 上最快（p50 0.7 秒）
-[rows]
-enabled = true
+[extraction]
+# 图片提取模型的 OpenRouter ID
 model = "qwen/qwen3.8-27b"
-# 只走这家服务商，留空由 OpenRouter 选
+# 指定推理服务商；空字符串由 OpenRouter 选择，切换模型时一并调整
 provider = "cerebras"
-# 服务商不支持 JSON Schema 输出时设为 true，格式写进提示词（Cerebras 上的 Qwen 不支持）
+# true 将输出格式放进提示词；false 使用模型的结构化输出接口
 schema_in_prompt = true
-# none | minimal | low | medium | high；留空表示不传。Qwen 默认会先思考，要设 none
+# 推理强度，需使用所选模型支持的值
 reasoning_effort = "none"
-max_tokens = 2000
-timeout = "2s"
+# 最大输出 token 数
+max_tokens = 8000
+# 图片最长边、最短边像素及 JPEG 质量（1–100）
+image_max_side = 1568
+image_min_side = 280
+jpeg_quality = 85
 
 [openrouter]
 base_url = "https://openrouter.ai"
@@ -82,22 +50,7 @@ app_name = "ledger-snap"
 # typesafe：直接调用 TypeSafe 官方接口（见 [typesafe]），模型为 jev-latest 或 jev-preview
 provider = "openrouter"
 model = "typesafe/jev-1.14"
-send_image = true
-# Jev 要求图片每边不超过 1568 像素；TypeSafe 官方接口要求至少 280 像素（OpenRouter 为 256）
-image_max_side = 1568
-image_min_side = 280
-jpeg_quality = 85
-# 金额、时间、文字行候选各自的数量上限，最大 254（Jev 每个问题最多 255 个选项，要留一个“没有”）。
-# 超出时金额按字号从大到小保留，时间和文字行按从上到下保留，截断情况记在识别记录的 truncated 里。
-# 分类和账户固定最多 254 个，超出同样截断并记录。
-max_candidates = 100
-
-# 交易、类型、金额低于阈值时交给视觉 LLM 兜底；时间、分类、账户低于阈值时标为拿不准
 [decision.thresholds]
-transaction = 0.6
-type = 0.6
-amount = 0.6
-time = 0.5
 category = 0.4
 asset = 0.4
 
@@ -107,27 +60,6 @@ api_key_env = "TYPESAFE_AI_API_KEY"
 timeout = "30s"
 # 官方接口只返回 token 数，按这个单价（美元/百万输入 token）估算费用
 input_price_per_mtok = 0.042
-
-[fallback]
-enabled = true
-# 识别时不问决策模型，每张截图都直接交给这个模型；修改账单仍用决策模型
-primary = false
-# 2026-10-21 用 6 张合成截图对比：Haiku 5.5 全对且便宜；Gemini 3.8 Flash 全对但贵 3 倍、偶尔很慢；
-# DeepSeek V4.1 Flash 1017 最快，但把待支付页记成了支出
-model = "anthropic/claude-haiku-5.5"
-# 只走这家服务商，留空由 OpenRouter 选
-provider = ""
-# 服务商不支持 JSON Schema 输出时设为 true，格式写进提示词
-schema_in_prompt = false
-# none | minimal | low | medium | high
-reasoning_effort = "low"
-max_tokens = 4000
-image_max_side = 1568
-
-[correction]
-model = "anthropic/claude-haiku-5.5"
-reasoning_effort = "low"
-max_tokens = 2000
 
 [recognize]
 timezone = "Asia/Shanghai"

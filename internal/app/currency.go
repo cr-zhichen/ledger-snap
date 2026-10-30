@@ -12,7 +12,7 @@ import (
 )
 
 // billMoney is what Qianji stores for a draft's amount, worked out the way
-// the app's currency dialog does (see docs/design.md 6.3).
+// the app's currency dialog does.
 type billMoney struct {
 	// Value is the bill's money, in the paying account's currency; for a
 	// transfer, what left the source account.
@@ -182,7 +182,7 @@ func moneyOf(d *recognize.Draft, c qianji.Catalog) (billMoney, error) {
 // adjust applies a draft's discount and, for a transfer or repayment, its
 // fee to a bill in the base currency. Qianji keeps the amount without the fee
 // and moves the accounts by extra.transfee on top of it: a fee out of the
-// source account, a discount into the target account (docs/design.md 6.3).
+// source account, a discount into the target account.
 // sent is what left the paying account.
 func adjust(m *billMoney, d *recognize.Draft, sent float64) error {
 	var fee, discount float64

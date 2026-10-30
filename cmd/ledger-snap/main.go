@@ -18,7 +18,6 @@ var commands = map[string]struct {
 	help string
 }{
 	"qianji-smoke": {runQianjiSmoke, "用测试账号登录钱迹，读目录和账单，并新增、修改、删除一笔测试账单"},
-	"ocr":          {runOCR, "用一个或多个 OCR 服务识别图片并打印文字行"},
 	"recognize":    {runRecognize, "用测试账号的目录识别截图，只打印结果，不写入钱迹"},
 	"serve":        {runServe, "启动给快捷指令调用的 HTTP 服务"},
 	"sync-bills":   {runSyncBills, "立即从钱迹同步账单缓存；--full 全量重建，--account 只同步一个账号"},

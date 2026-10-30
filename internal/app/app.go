@@ -199,14 +199,15 @@ func (s *Service) catalog(ctx context.Context, u *store.User) (qianji.Catalog, e
 
 // Result is what the shortcut receives.
 type Result struct {
-	RecordID  string   `json:"record_id"`
-	Status    string   `json:"status"`
-	Kind      string   `json:"kind,omitempty"` // 支出 | 收入 | 转账 | 信用卡还款
-	Summary   string   `json:"summary"`
-	Reason    string   `json:"reason,omitempty"`
-	Uncertain []string `json:"uncertain,omitempty"`
-	Money     string   `json:"money,omitempty"`
-	Currency  string   `json:"currency,omitempty"` // of Money; "" is the account's
+	RecordID         string   `json:"record_id"`
+	Status           string   `json:"status"`
+	Kind             string   `json:"kind,omitempty"` // 支出 | 收入 | 转账 | 信用卡还款
+	Summary          string   `json:"summary"`
+	Reason           string   `json:"reason,omitempty"`
+	Uncertain        []string `json:"uncertain,omitempty"`
+	WriteUnconfirmed bool     `json:"write_unconfirmed,omitempty"`
+	Money            string   `json:"money,omitempty"`
+	Currency         string   `json:"currency,omitempty"` // of Money; "" is the account's
 	// Other is the other side of a two-currency bill: what a transfer's
 	// target received, or what a foreign purchase cost in the account's
 	// currency.
@@ -222,7 +223,7 @@ type Result struct {
 const TimeLayout = "2006-01-02 15:04"
 
 func (s *Service) result(rec *store.Record, d *recognize.Draft, c qianji.Catalog) *Result {
-	res := &Result{RecordID: rec.ID, Status: rec.Status, Kind: d.Kind.Label(), Summary: rec.Summary, Uncertain: d.Uncertain}
+	res := &Result{RecordID: rec.ID, Status: rec.Status, Kind: d.Kind.Label(), Summary: rec.Summary, Uncertain: d.Uncertain, Reason: d.Reason, WriteUnconfirmed: rec.Status == "needs_confirm" && rec.BillID != ""}
 	if rec.Summary != "" {
 		res.Money, res.Currency, res.Time = d.Money, d.Currency, d.Time.In(s.Config.Location()).Format(TimeLayout)
 		res.Discount, res.Fee = d.Discount, d.Fee
@@ -232,9 +233,15 @@ func (s *Service) result(rec *store.Record, d *recognize.Draft, c qianji.Catalog
 	return res
 }
 
-func (s *Service) Recognize(ctx context.Context, u *store.User, image []byte, upload time.Time) (*Result, error) {
+// BatchResult is the result of one screenshot, including a single-bill screenshot.
+type BatchResult struct {
+	BatchID string    `json:"batch_id"`
+	Records []*Result `json:"records"`
+	Reason  string    `json:"reason,omitempty"`
+}
+
+func (s *Service) Recognize(ctx context.Context, u *store.User, image []byte, upload time.Time) (*BatchResult, error) {
 	defer s.lock(u.UID)()
-	// For the next recognition and edit; this one uses the cache as it is.
 	s.syncSoon(u.UID)
 	catalog, err := s.catalog(ctx, u)
 	if err != nil {
@@ -244,27 +251,85 @@ func (s *Service) Recognize(ctx context.Context, u *store.User, image []byte, up
 	if err != nil {
 		return nil, err
 	}
-	input := recognize.Input{
-		Image: image, UploadTime: upload, Catalog: catalog,
-		Memory: recognize.Memory{AssetAliases: mem.AssetAliases},
-		History: func(ctx context.Context, merchants []string) (map[string][]recognize.PastBill, error) {
-			return s.history(ctx, u.UID, merchants, upload)
-		},
-	}
-	draft, trace, err := s.Recognizer.Recognize(ctx, input)
+	input := recognize.Input{Image: image, UploadTime: upload, Catalog: catalog, Memory: recognize.Memory{AssetAliases: mem.AssetAliases}, History: func(ctx context.Context, names []string) (map[string][]recognize.PastBill, error) {
+		return s.history(ctx, u.UID, names, upload)
+	}}
+	drafts, trace, err := s.Recognizer.Recognize(ctx, input)
 	if err != nil {
 		return nil, err
 	}
-	if unmatched(draft) && time.Since(time.Unix(u.CatalogAt, 0)) >= recheckAfter {
-		draft, trace, catalog = s.recheck(ctx, u, input, draft, trace)
+	if slices.ContainsFunc(drafts, unmatched) && time.Since(time.Unix(u.CatalogAt, 0)) >= recheckAfter {
+		fresh, e := s.refreshCatalog(ctx, u)
+		if e != nil {
+			trace.CatalogRefresh = "刷新账户和分类失败"
+		} else {
+			if !slices.Equal(catalog.Assets, fresh.Assets) || !slices.Equal(catalog.Categories, fresh.Categories) {
+				input.Catalog = fresh
+				matchStart := time.Now()
+				if err := s.Recognizer.Match(ctx, drafts, input, trace); err != nil {
+					return nil, err
+				}
+				trace.TotalMs += time.Since(matchStart).Milliseconds()
+				trace.CatalogRefresh = "账户和分类有更新，已重新匹配"
+			}
+			catalog = fresh
+		}
 	}
-	rec := &store.Record{ID: "r_" + randomHex(10), UID: u.UID, CreatedAt: upload.Unix()}
-	rec.ImagePath, err = s.saveImage(u.UID, rec.ID, image)
+	batch := &store.Batch{ID: "b_" + randomHex(10), UID: u.UID, CreatedAt: upload.Unix(), Reason: trace.Extraction.Reason}
+	var records []*store.Record
+	imagePath := ""
+	if len(drafts) > 0 {
+		imagePath, err = s.saveImage(u.UID, batch.ID, image)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, draft := range drafts {
+		records = append(records, &store.Record{ID: "r_" + randomHex(10), UID: u.UID, CreatedAt: upload.Unix(), Status: "needs_confirm", ImagePath: imagePath, Draft: toJSON(draft), Trace: toJSON(trace), Summary: Summary(draft, catalog, s.Config.Location())})
+	}
+	if err := s.Store.SaveBatch(ctx, batch, records); err != nil {
+		return nil, err
+	}
+	result := &BatchResult{BatchID: batch.ID, Records: []*Result{}, Reason: batch.Reason}
+	for i, rec := range records {
+		item, err := s.settle(ctx, u, rec, nil, drafts[i], catalog, modeNew)
+		if err != nil {
+			// Earlier writes remain visible; this draft keeps its bill ID for retry.
+			rec.Status = "needs_confirm"
+			s.log().Warn("账单写入未确认", "record_id", rec.ID, "err", err)
+			drafts[i].Reason = "记账未完成，请重新确认或放弃这笔账单"
+			rec.Draft = toJSON(drafts[i])
+			if e := s.Store.SaveRecord(ctx, rec); e != nil {
+				return nil, e
+			}
+			item = s.result(rec, drafts[i], catalog)
+		}
+		result.Records = append(result.Records, item)
+	}
+	return result, nil
+}
+
+func (s *Service) BatchCurrent(ctx context.Context, u *store.User, id string) (*BatchResult, error) {
+	b, records, err := s.Store.Batch(ctx, u.UID, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, userErr(404, "找不到这次识别记录")
+	}
 	if err != nil {
 		return nil, err
 	}
-	rec.Trace = toJSON(trace)
-	return s.settle(ctx, u, rec, nil, draft, catalog, modeNew)
+	catalog, err := s.catalog(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	result := &BatchResult{BatchID: b.ID, Reason: b.Reason, Records: []*Result{}}
+	for _, record := range records {
+		var draft recognize.Draft
+		if err := json.Unmarshal([]byte(record.Draft), &draft); err != nil {
+			return nil, err
+		}
+		result.Records = append(result.Records, s.result(record, &draft, catalog))
+	}
+	return result, nil
 }
 
 // recheckAfter is how old the catalog must be before an unmatched draft
@@ -288,30 +353,6 @@ func unmatched(d *recognize.Draft) bool {
 	return d.AssetID == "" || d.CategoryID == ""
 }
 
-// recheck refreshes the catalog once for an unmatched draft, in case the
-// account or category was added in the app since it was cached, and
-// recognizes again with the same OCR result when the catalog changed.
-func (s *Service) recheck(ctx context.Context, u *store.User, in recognize.Input, d *recognize.Draft, tr *recognize.Trace) (*recognize.Draft, *recognize.Trace, qianji.Catalog) {
-	fresh, err := s.refreshCatalog(ctx, u)
-	if err != nil {
-		tr.CatalogRefresh = "刷新账户和分类失败：" + err.Error()
-		return d, tr, in.Catalog
-	}
-	if slices.Equal(in.Catalog.Assets, fresh.Assets) && slices.Equal(in.Catalog.Categories, fresh.Categories) {
-		tr.CatalogRefresh = "账户和分类没有变化"
-		return d, tr, fresh
-	}
-	in.Catalog, in.Lines, in.RowItems = fresh, tr.OCRLines, tr.RowItems
-	d2, tr2, err := s.Recognizer.Recognize(ctx, in)
-	if err != nil {
-		tr.CatalogRefresh = "账户和分类有更新，重新识别失败：" + err.Error()
-		return d, tr, fresh
-	}
-	tr2.OCRMs, tr2.RowsMs, tr2.Cost = tr.OCRMs, tr2.RowsMs+tr.RowsMs, tr2.Cost+tr.Cost
-	tr2.CatalogRefresh = "账户和分类有更新，已重新识别"
-	return d2, tr2, fresh
-}
-
 // settleMode says why a draft is being settled.
 type settleMode int
 
@@ -326,12 +367,11 @@ const (
 	modeEdit
 )
 
-var fieldNames = map[string]string{"category": "分类", "asset": "账户", "target_asset": "转入账户", "time": "时间", "discount": "优惠", "fee": "手续费"}
+var fieldNames = map[string]string{"money": "金额", "currency": "币种", "category": "分类", "asset": "账户", "target_asset": "转入账户", "time": "时间", "discount": "优惠", "fee": "手续费"}
 
 // settle writes a draft (or records why not) and stores the record. prev is
 // the draft before an edit; see write.
 func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, prev, draft *recognize.Draft, catalog qianji.Catalog, mode settleMode) (*Result, error) {
-	rec.Draft = toJSON(draft)
 	reason := ""
 	hold := func(why string) { rec.Status, reason = "needs_confirm", why }
 	switch {
@@ -381,6 +421,8 @@ func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, 
 		}
 		rec.Status = "written"
 	}
+	draft.Reason = reason
+	rec.Draft = toJSON(draft)
 	if err := s.Store.SaveRecord(ctx, rec); err != nil {
 		return nil, err
 	}
@@ -498,24 +540,29 @@ func (s *Service) write(ctx context.Context, u *store.User, rec *store.Record, p
 	}
 	input := billInput(d, catalog, m)
 	var deletes []string
+	billID := rec.BillID
 	if rec.BillID != "" && rec.Bill != "" {
 		var old struct {
 			Type int `json:"type"`
 		}
 		if json.Unmarshal([]byte(rec.Bill), &old) == nil && isTransferType(old.Type) != isTransferType(input.Type) {
-			deletes = []string{rec.BillID}
-			rec.BillID = ""
+			deletes = []string{billID}
+			billID = qianji.NewBillID()
 		}
 	}
 	if rec.BillID == "" {
-		rec.BillID = qianji.NewBillID()
+		billID = qianji.NewBillID()
+		rec.BillID = billID
+		if err := s.Store.SaveRecord(ctx, rec); err != nil {
+			return err
+		}
 	}
-	bill := qianji.NewBill(u.UID, rec.BillID, input)
+	bill := qianji.NewBill(u.UID, billID, input)
 	if prev != nil && rec.Bill != "" && deletes == nil {
 		// If the old draft no longer converts, every field counts as changed.
 		before := map[string]any{}
 		if pm, err := moneyOf(prev, catalog); err == nil {
-			before = qianji.NewBill(u.UID, rec.BillID, billInput(prev, catalog, pm))
+			before = qianji.NewBill(u.UID, billID, billInput(prev, catalog, pm))
 		}
 		if bill, err = mergeBill(rec.Bill, before, bill); err != nil {
 			return err
@@ -533,10 +580,10 @@ func (s *Service) write(ctx context.Context, u *store.User, rec *store.Record, p
 	if err != nil {
 		return userErr(502, "写入钱迹失败，可能已经记上，请在钱迹里确认：%v", err)
 	}
-	if !receipt.Accepted([]string{rec.BillID}, nil, deletes) {
+	if !receipt.Accepted([]string{billID}, nil, deletes) {
 		return userErr(502, "钱迹没有确认这笔账单（%+v）", receipt)
 	}
-	rec.Bill = toJSON(bill)
+	rec.BillID, rec.Bill = billID, toJSON(bill)
 	s.cacheWrite(ctx, u.UID, bill, deletes)
 	return nil
 }
@@ -647,11 +694,8 @@ func (s *Service) Correct(ctx context.Context, u *store.User, id, text string) (
 // history.
 func (s *Service) learn(ctx context.Context, u *store.User, rec *store.Record, before, after *recognize.Draft) {
 	if after.AssetID != before.AssetID && after.AssetID != "" && after.AssetID != qianji.NoID {
-		var trace recognize.Trace
-		if json.Unmarshal([]byte(rec.Trace), &trace) == nil {
-			if p := trace.PaymentText(); p != "" {
-				_ = s.Store.PutAssetAlias(ctx, u.UID, p, after.AssetID, time.Now().Unix())
-			}
+		if before.Payment != "" {
+			_ = s.Store.PutAssetAlias(ctx, u.UID, before.Payment, after.AssetID, time.Now().Unix())
 		}
 	}
 }
@@ -662,6 +706,17 @@ func (s *Service) Delete(ctx context.Context, u *store.User, id string) (*Result
 	rec, _, err := s.loadRecord(ctx, u, id)
 	if err != nil {
 		return nil, err
+	}
+	if rec.Status == "needs_confirm" && rec.BillID != "" {
+		// A submitted write can succeed even when its response is lost.
+		if err := s.waitSync(ctx, u.UID); err != nil {
+			return nil, err
+		}
+		if _, err := s.Store.Bill(ctx, u.UID, rec.BillID); err == nil {
+			rec.Status = "written"
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
 	}
 	switch rec.Status {
 	case "written":

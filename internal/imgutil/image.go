@@ -1,4 +1,4 @@
-// Package imgutil resizes screenshots for OCR and model input.
+// Package imgutil resizes screenshots for model input.
 package imgutil
 
 import (
@@ -39,13 +39,4 @@ func Fit(data []byte, maxSide, minSide, quality int) ([]byte, error) {
 		return nil, err
 	}
 	return out.Bytes(), nil
-}
-
-// Size returns the pixel dimensions of an encoded image.
-func Size(data []byte) (int, int, error) {
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return 0, 0, err
-	}
-	return cfg.Width, cfg.Height, nil
 }
