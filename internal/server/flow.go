@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,9 +58,6 @@ const (
 	optRefresh  = "刷新账户和分类"
 	optBack     = "返回"
 )
-
-// keepKind in a step path means the edit keeps the bill's kind.
-const keepKind = "keep"
 
 func (s *Server) flowLogin(w http.ResponseWriter, r *http.Request) {
 	body := readBody(r)
@@ -142,7 +138,9 @@ func (s *Server) flowStep(w http.ResponseWriter, r *http.Request, u *store.User)
 			return
 		}
 	}
-	step, err := s.advance(ctx, u, id, strings.SplitN(r.PathValue("step"), "/", 3), value)
+	path := strings.SplitN(r.PathValue("step"), "/", 3)
+	selection := editSelection{Origin: r.URL.Query().Get("origin"), Kind: recognize.Kind(r.URL.Query().Get("kind")), Source: r.URL.Query().Get("source")}
+	step, err := s.advance(ctx, u, id, path, value, selection)
 	if err != nil {
 		var ue *app.UserError
 		if errors.As(err, &ue) && (ue.Status == http.StatusUnauthorized || ue.Status == http.StatusNotFound) {
@@ -156,6 +154,29 @@ func (s *Server) flowStep(w http.ResponseWriter, r *http.Request, u *store.User)
 		}
 		step = mainStep(cur, "没成功："+s.message(r, err))
 	}
+	if path[0] == "edit" {
+		selection.Origin = "edit"
+	} else if path[0] == "kind" && value != optBack {
+		selection.Origin, selection.Kind = "kind", kindOf(value)
+		if !selection.Kind.IsTransfer() {
+			selection.Source = ""
+		}
+	} else if path[0] == "source" && value != optBack {
+		selection.Source = value
+	}
+	if step.Next != "" {
+		next, _ := url.Parse(step.Next)
+		parts := strings.Split(strings.TrimPrefix(next.Path, flowPath(id)+"/"), "/")
+		switch parts[0] {
+		case "category", "source", "target":
+			selection.Kind = recognize.Kind(parts[1])
+			step.Next = withQuery(step.Next, "origin", selection.Origin)
+			fallthrough
+		case "edit", "kind":
+			step.Next = withQuery(step.Next, "kind", string(selection.Kind))
+			step.Next = withQuery(step.Next, "source", selection.Source)
+		}
+	}
 	if batchID != "" {
 		if step.Action == "done" {
 			batch, err := s.App.BatchCurrent(ctx, u, batchID)
@@ -163,7 +184,7 @@ func (s *Server) flowStep(w http.ResponseWriter, r *http.Request, u *store.User)
 				s.failStep(w, r, err)
 				return
 			}
-			if len(batch.Records) > 1 {
+			if len(batch.Records) > 1 && value != optDone {
 				step = batchStep(batch, step.Message)
 			}
 		} else {
@@ -175,7 +196,9 @@ func (s *Server) flowStep(w http.ResponseWriter, r *http.Request, u *store.User)
 
 const optBatch = "返回账单列表"
 
-func batchOption(i int, res *app.Result) string { return fmt.Sprintf("%d. %s", i+1, state(res)) }
+func batchOption(i int, res *app.Result) string {
+	return fmt.Sprintf("%d. %s · %s\n%s", i+1, res.Display.Amount, statusLabel(res), res.Display.Merchant)
+}
 func batchSummary(batch *app.BatchResult) string {
 	written, pending := 0, 0
 	for _, r := range batch.Records {
@@ -199,14 +222,14 @@ func batchStep(batch *app.BatchResult, note string) *Step {
 	for i, item := range batch.Records {
 		opts = append(opts, batchOption(i, item))
 	}
-	return choose(withNote(note, batchSummary(batch)+"，选择一笔查看或修改"), opts, batch.BatchID, "batch")
+	return choose(withNote(note, batchSummary(batch)+"\n选择一笔查看或修改"), opts, batch.BatchID, "batch")
 }
 func withBatch(step *Step, id string) *Step {
 	if step.Next != "" {
 		if strings.HasSuffix(step.Next, "/main") && !slices.Contains(step.Options, optBatch) {
 			step.Options = append(step.Options, optBatch)
 		}
-		step.Next += "?batch=" + url.QueryEscape(id)
+		step.Next = withQuery(step.Next, "batch", id)
 	}
 	return step
 }
@@ -256,9 +279,17 @@ func flowValue(r *http.Request) string {
 	return fmt.Sprint(body.Value)
 }
 
+// editSelection retains unfinished choices while navigating back through a form.
+// It is carried only by editing routes and is discarded on save or leaving edit.
+type editSelection struct {
+	Origin string
+	Kind   recognize.Kind
+	Source string
+}
+
 // advance handles the answer to one step and returns the next one. path is
 // the step name followed by the state earlier steps carried along.
-func (s *Server) advance(ctx context.Context, u *store.User, id string, path []string, value string) (*Step, error) {
+func (s *Server) advance(ctx context.Context, u *store.User, id string, path []string, value string, selection editSelection) (*Step, error) {
 	arg := func(i int) string {
 		if i < len(path) {
 			return path[i]
@@ -266,6 +297,12 @@ func (s *Server) advance(ctx context.Context, u *store.User, id string, path []s
 		return ""
 	}
 	if goesBack(path[0], value) {
+		if path[0] == "target" {
+			return s.pickSource(ctx, u, id, arg(1), selection.Source)
+		}
+		if (path[0] == "source" || path[0] == "category") && selection.Origin == "kind" {
+			return kindStep(id, recognize.Kind(arg(1))), nil
+		}
 		cur, err := s.App.Current(ctx, u, id)
 		if err != nil {
 			return nil, err
@@ -276,14 +313,14 @@ func (s *Server) advance(ctx context.Context, u *store.User, id string, path []s
 	case "main":
 		return s.mainChoice(ctx, u, id, value)
 	case "edit":
-		return s.editChoice(ctx, u, id, value)
+		return s.editChoice(ctx, u, id, value, selection)
 	case "kind":
 		kind := kindOf(value)
 		if kind == "" {
 			return nil, &app.UserError{Status: 400, Message: "不认识的类型：" + value}
 		}
 		if kind.IsTransfer() {
-			return s.pickSource(ctx, u, id, string(kind))
+			return s.pickSource(ctx, u, id, string(kind), selection.Source)
 		}
 		return s.pickCategory(ctx, u, id, kind)
 	case "category":
@@ -293,15 +330,7 @@ func (s *Server) advance(ctx context.Context, u *store.User, id string, path []s
 	case "source":
 		return s.pickTarget(ctx, u, id, arg(1), value)
 	case "target":
-		source, err := base64.RawURLEncoding.DecodeString(arg(2))
-		if err != nil {
-			return nil, &app.UserError{Status: 400, Message: "转出账户读不出来，请重新选择"}
-		}
-		p := app.Patch{Asset: string(source), TargetAsset: value}
-		if arg(1) != keepKind {
-			p.Kind = arg(1)
-		}
-		return s.patch(ctx, u, id, p)
+		return s.patch(ctx, u, id, app.Patch{Kind: arg(1), Asset: selection.Source, TargetAsset: value})
 	case "money":
 		return s.patch(ctx, u, id, app.Patch{Money: strings.ReplaceAll(value, ",", "")})
 	case "other":
@@ -323,18 +352,15 @@ func (s *Server) advance(ctx context.Context, u *store.User, id string, path []s
 }
 
 // goesBack reports whether answering step with value returns to the edit
-// menu. Cancelling an input dialog stops the whole shortcut, so the input
-// steps take an empty answer as going back instead, and the amount steps 0
-// too, as an amount is never 0. A discount or fee of 0 removes it.
+// menu or the preceding account/type picker. Cancelling an input dialog
+// stops the shortcut; submit an empty answer to return. Zero removes a discount
+// or fee, and is not a navigation command.
 func goesBack(step, value string) bool {
 	switch step {
 	case "kind", "category", "asset", "source", "target":
 		return value == optBack
-	case "time", "text", "discount", "fee":
+	case "time", "text", "discount", "fee", "money", "other":
 		return value == ""
-	case "money", "other":
-		v, err := strconv.ParseFloat(strings.ReplaceAll(value, ",", ""), 64)
-		return value == "" || err == nil && v == 0
 	}
 	return false
 }
@@ -352,7 +378,7 @@ func (s *Server) mainChoice(ctx context.Context, u *store.User, id, value string
 			}
 		}
 		if cur.Status == "written" {
-			return done("已记账：" + cur.Summary), nil
+			return done(state(cur)), nil
 		}
 		// Still held, e.g. a transfer without both accounts: show why.
 	case optEdit:
@@ -370,7 +396,7 @@ func (s *Server) mainChoice(ctx context.Context, u *store.User, id, value string
 	return mainStep(cur, ""), nil
 }
 
-func (s *Server) editChoice(ctx context.Context, u *store.User, id, value string) (*Step, error) {
+func (s *Server) editChoice(ctx context.Context, u *store.User, id, value string, selection editSelection) (*Step, error) {
 	cur, err := s.App.Current(ctx, u, id)
 	if err != nil {
 		return nil, err
@@ -386,7 +412,7 @@ func (s *Server) editChoice(ctx context.Context, u *store.User, id, value string
 	switch value {
 	case optAsset:
 		if kind.IsTransfer() {
-			return s.pickSource(ctx, u, id, keepKind)
+			return s.pickSource(ctx, u, id, string(kind), selection.Source)
 		}
 		o, err := s.App.Options(ctx, u)
 		if err != nil {
@@ -394,11 +420,10 @@ func (s *Server) editChoice(ctx context.Context, u *store.User, id, value string
 		}
 		return chooseEdit("用哪个账户？", o.AssetsOrNone, id, "asset"), nil
 	case optKind:
-		var labels []string
-		for _, k := range app.Kinds {
-			labels = append(labels, k.Label())
+		if selection.Kind != "" {
+			kind = selection.Kind
 		}
-		return chooseEdit("改成哪种类型？", labels, id, "kind"), nil
+		return kindStep(id, kind), nil
 	case optCategory:
 		if kind.IsTransfer() {
 			return editStep(cur, "转账和还款没有分类"), nil
@@ -442,8 +467,8 @@ func (s *Server) pickCategory(ctx context.Context, u *store.User, id string, kin
 }
 
 // pickSource starts choosing both accounts of a transfer; kind is the new
-// kind's code, or keepKind.
-func (s *Server) pickSource(ctx context.Context, u *store.User, id, kind string) (*Step, error) {
+// kind's code.
+func (s *Server) pickSource(ctx context.Context, u *store.User, id, kind, selected string) (*Step, error) {
 	o, err := s.App.Options(ctx, u)
 	if err != nil {
 		return nil, err
@@ -451,11 +476,14 @@ func (s *Server) pickSource(ctx context.Context, u *store.User, id, kind string)
 	if len(o.Assets) < 2 {
 		return nil, &app.UserError{Status: 400, Message: "转账需要至少两个账户，请先在钱迹里添加"}
 	}
-	return chooseEdit("从哪个账户转出？", o.Assets, id, "source", kind), nil
+	prompt := "从哪个账户转出？"
+	if selected != "" {
+		prompt += "\n当前选择：" + selected
+	}
+	return chooseEdit(prompt, o.Assets, id, "source", kind), nil
 }
 
-// pickTarget carries the chosen source account in the path, base64-encoded so
-// the URL stays plain ASCII.
+// pickTarget shows the target accounts; editSelection carries the source.
 func (s *Server) pickTarget(ctx context.Context, u *store.User, id, kind, source string) (*Step, error) {
 	o, err := s.App.Options(ctx, u)
 	if err != nil {
@@ -466,7 +494,7 @@ func (s *Server) pickTarget(ctx context.Context, u *store.User, id, kind, source
 	if kind == string(recognize.KindCredit) {
 		prompt = "还的是哪个信用账户？"
 	}
-	return chooseEdit(prompt, targets, id, "target", kind, base64.RawURLEncoding.EncodeToString([]byte(source))), nil
+	return chooseEdit(prompt+"\n转出账户："+source, targets, id, "target", kind), nil
 }
 
 func (s *Server) patch(ctx context.Context, u *store.User, id string, p app.Patch) (*Step, error) {
@@ -535,15 +563,38 @@ func editStep(cur *app.Result, note string) *Step {
 
 // state starts every dialog about a record with whether it is in Qianji.
 func state(res *app.Result) string {
-	switch {
-	case res.Status == "written":
-		return "已记账：" + res.Summary
-	case res.WriteUnconfirmed:
-		return "记账结果未确认，请重新确认或放弃\n" + res.Summary
-	case res.Reason == "":
-		return "还没记账：" + res.Summary
+	lines := []string{statusLabel(res) + " · " + res.Kind + " " + res.Display.Amount, res.Display.Details}
+	if res.Reason != "" {
+		lines = append(lines, res.Reason)
 	}
-	return "还没记账，" + res.Reason + "\n" + res.Summary
+	return strings.Join(lines, "\n")
+}
+
+var statusLabels = map[string]string{
+	"written": "已记账", "needs_confirm": "待确认", "rejected": "未记账", "deleted": "已删除", "discarded": "已放弃",
+}
+
+func statusLabel(res *app.Result) string {
+	if res.WriteUnconfirmed {
+		return "记账结果未确认"
+	}
+	return statusLabels[res.Status]
+}
+
+func kindStep(id string, selected recognize.Kind) *Step {
+	var labels []string
+	for _, k := range app.Kinds {
+		labels = append(labels, k.Label())
+	}
+	return chooseEdit("改成哪种类型？\n当前选择："+selected.Label(), labels, id, "kind")
+}
+
+func withQuery(path, key, value string) string {
+	u, _ := url.Parse(path)
+	q := u.Query()
+	q.Set(key, value)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func chooseEdit(prompt string, options []string, id string, path ...string) *Step {
