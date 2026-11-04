@@ -340,7 +340,7 @@ const recheckAfter = time.Minute
 // unmatched reports a draft whose account or category may be missing from
 // the cached catalog: none was picked, or one was picked without confidence.
 func unmatched(d *recognize.Draft) bool {
-	if d.Status != "ok" || d.Kind == recognize.KindRefund {
+	if d.Status != "ok" {
 		return false
 	}
 	for _, field := range []string{"asset", "target_asset", "category"} {
@@ -378,8 +378,6 @@ func (s *Service) settle(ctx context.Context, u *store.User, rec *store.Record, 
 	switch {
 	case draft.Status != "ok":
 		rec.Status, reason = "rejected", draft.Reason
-	case draft.Kind == recognize.KindRefund:
-		rec.Status, reason = "rejected", "这是一笔退款，暂不支持自动记录，请在钱迹的原账单上添加退款"
 	default:
 		rec.Summary = Summary(draft, catalog, s.Config.Location())
 		if why := transferProblem(draft, catalog); why != "" {

@@ -112,7 +112,7 @@ func (r *Recognizer) Match(ctx context.Context, drafts []*Draft, in Input, trace
 	for i, d := range drafts {
 		d.CategoryID, d.AssetID, d.TargetID = "", "", ""
 		d.Uncertain = remove(remove(remove(d.Uncertain, "category"), "asset"), "target_asset")
-		if d.Status != "ok" || d.Kind == KindRefund {
+		if d.Status != "ok" {
 			continue
 		}
 		prefix := fmt.Sprintf("b%d_", i)
@@ -159,7 +159,7 @@ func (r *Recognizer) Match(ctx context.Context, drafts []*Draft, in Input, trace
 	trace.Decision = resp
 	trace.Cost += resp.Usage.Cost
 	for i, d := range drafts {
-		if d.Status != "ok" || d.Kind == KindRefund {
+		if d.Status != "ok" {
 			continue
 		}
 		prefix := fmt.Sprintf("b%d_", i)

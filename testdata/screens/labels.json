@@ -26,7 +26,7 @@
     "23_bill_list.jpg": [{"status": "ok", "kind": "expense", "money": "32.50", "merchant": "美团", "time": "2026-10-21 12:10"}, {"status": "ok", "kind": "expense", "money": "15.90", "merchant": "瑞幸", "time": "2026-10-21 09:02"}, {"status": "ok", "kind": "expense", "money": "41.20", "merchant": "滴滴", "time": "2026-10-20 22:41"}, {"status": "ok", "kind": "income", "money": "15000.00", "merchant": "工资", "time": "2026-10-20 10:00"}, {"status": "ok", "kind": "expense", "money": "156.40", "merchant": "盒马", "time": "2026-10-20 18:15"}, {"status": "ok", "kind": "expense", "money": "58.00", "merchant": "中国移动", "time": "2026-10-19 08:00"}],
     "24_dark_lawson.jpg": [{"status": "ok", "kind": "expense", "money": "12.50", "time": "2026-10-20 23:40", "merchant": "罗森"}],
     "25_ad_heavy.jpg": [{"status": "ok", "kind": "expense", "money": "18.00", "asset": "微信零钱", "time": "2026-10-21 08:14", "merchant": "便利蜂", "discount": "-"}],
-    "26_refund.jpg": [{"status": "ok", "kind": "refund"}],
+    "26_refund.jpg": [{"status": "ok", "kind": "income", "money": "25.00", "asset": "招商银行信用卡(1234)", "time": "2026-10-21 16:20", "merchant": "瑞幸咖啡"}],
     "27_stock.jpg": [],
     "28_news.jpg": [],
     "29_product_page.jpg": [],

@@ -34,7 +34,7 @@ type Extraction struct {
 const extractionInstructions = `你是记账截图识别助手。只根据图片提取交易事实，按从上到下输出 transactions 数组，不选择钱迹账户或分类。
 - 支持单笔和多笔交易列表。每个完整交易卡片输出一项；月度统计、余额、广告、导航、推荐商品不算交易。金额被遮住或卡片只露出边缘时不猜测。不是交易则返回空数组并在 reason 说明。
 - 已完成、待支付、确认付款（含 Apple Pay）、处理中的具体交易都提取；失败、取消、关闭的不要提取。通知中明确的支出或收入算交易；验证码短信不算交易。
-- kind: expense 支出（消费、转给别人、发红包），income 收入，transfer 自己账户转账或提现充值，credit 还信用卡花呗，refund 退款。transfer 仅限明确的自己账户之间转移；给具名收款人转账、向别人付款都用 expense，即使页面标题叫“转账成功”。
+- kind: expense 支出（消费、转给别人、发红包），income 收入（含退款，退款在 description 注明“退款”），transfer 自己账户转账或提现充值，credit 还信用卡花呗。transfer 仅限明确的自己账户之间转移；给具名收款人转账、向别人付款都用 expense，即使页面标题叫“转账成功”。
 - amount 取这笔交易的实际支付或到账金额，两位小数不带符号，不能取广告价、优惠、余额或订单号。amount_role: paid 表示实付或源账户实际扣款；principal 表示尚未计入手续费或优惠的本金；received 表示转账或还款的目标账户到账额。支出和收入一般为 paid。转账优先选明确的实际扣款，不要自己加减；只显示提现本金和额外手续费时输出本金及 principal，只有到账额时输出 received。
 - same_currency_received 只填自己账户转账/还款截图明确显示的同币种实际到账金额，没有则空；与 amount 分别原样提取，不要计算。例如提现本金 500、服务费 0.50、实际到账 499.50，必须保留到账 499.50，以便程序判断手续费是内扣还是额外收取。
 - discount 是这笔交易已使用的优惠合计，有合计直接取，不能把合计再加到明细上。fee 是自己转账/提现/还款额外收取的手续费。没使用的付款方式优惠、付款后领取的券、积分奖励不是已用优惠。
@@ -51,7 +51,7 @@ func factSchema() map[string]any {
 	for _, k := range []string{"amount", "currency", "converted_amount", "converted_currency", "same_currency_received", "discount", "fee", "date", "clock", "merchant", "payment", "target_payment", "description"} {
 		props[k] = map[string]any{"type": "string"}
 	}
-	props["kind"] = map[string]any{"type": "string", "enum": []string{"expense", "income", "transfer", "credit", "refund"}}
+	props["kind"] = map[string]any{"type": "string", "enum": []string{"expense", "income", "transfer", "credit"}}
 	props["amount_role"] = map[string]any{"type": "string", "enum": []string{"paid", "principal", "received"}}
 	props["uncertain_fields"] = map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"money", "currency", "time", "discount", "fee"}}}
 	return map[string]any{"type": "object", "properties": props, "required": []string{"kind", "amount", "amount_role", "currency", "converted_amount", "converted_currency", "same_currency_received", "discount", "fee", "date", "clock", "merchant", "payment", "target_payment", "description", "uncertain_fields"}, "additionalProperties": false}
@@ -62,7 +62,7 @@ var extractionSchema = map[string]any{"type": "object", "properties": map[string
 }, "required": []string{"transactions", "reason"}, "additionalProperties": false}
 
 func (r *Recognizer) draft(f Fact, upload time.Time) (*Draft, error) {
-	if !slices.Contains([]Kind{KindExpense, KindIncome, KindTransfer, KindCredit, KindRefund}, f.Kind) {
+	if !slices.Contains([]Kind{KindExpense, KindIncome, KindTransfer, KindCredit}, f.Kind) {
 		return nil, fmt.Errorf("无法确定交易类型")
 	}
 	money, err := amountIn(f.Amount)
@@ -100,7 +100,7 @@ func (r *Recognizer) draft(f Fact, upload time.Time) (*Draft, error) {
 	if (d.Converted == "") != (d.ConvertedCurrency == "") {
 		return nil, fmt.Errorf("另一币种金额和币种不完整")
 	}
-	if d.Kind == KindIncome || d.Kind == KindRefund {
+	if d.Kind == KindIncome {
 		d.Discount, d.Fee = "", ""
 	} else if !d.Kind.IsTransfer() {
 		d.Fee = ""
