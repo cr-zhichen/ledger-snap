@@ -15,11 +15,10 @@ const (
 	KindIncome   Kind = "income"
 	KindTransfer Kind = "transfer"
 	KindCredit   Kind = "credit"
-	KindRefund   Kind = "refund"
 )
 
 var kindLabels = map[Kind]string{
-	KindExpense: "支出", KindIncome: "收入", KindTransfer: "转账", KindCredit: "信用卡还款", KindRefund: "退款",
+	KindExpense: "支出", KindIncome: "收入", KindTransfer: "转账", KindCredit: "信用卡还款",
 }
 
 func (k Kind) Label() string { return kindLabels[k] }

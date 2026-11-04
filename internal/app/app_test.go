@@ -21,7 +21,6 @@ func TestUnmatched(t *testing.T) {
 		{"transfer without target", recognize.Draft{Status: "ok", Kind: recognize.KindTransfer, AssetID: "a"}, true},
 		{"transfer matched", recognize.Draft{Status: "ok", Kind: recognize.KindCredit, AssetID: "a", TargetID: "b"}, false},
 		{"rejected", recognize.Draft{Status: "rejected"}, false},
-		{"refund", recognize.Draft{Status: "ok", Kind: recognize.KindRefund}, false},
 	}
 	for _, tc := range cases {
 		if got := unmatched(&tc.draft); got != tc.want {

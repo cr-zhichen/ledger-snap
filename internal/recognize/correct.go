@@ -39,7 +39,7 @@ func (r *Recognizer) Correct(ctx context.Context, d *Draft, catalog qianji.Catal
 	defer func() { trace.TotalMs = time.Since(start).Milliseconds() }()
 	prompt := fmt.Sprintf(`按用户意见提取要修改的字段，未提到的字段必须为 null，不要重新生成整笔账。
 原账单：%s。现在时间：%s。用户意见：%s。
-kind 使用 expense/income/transfer/credit/refund。amount 是实际扣款/到账金额，保留两位小数。discount/fee 填 0 清除。
+kind 使用 expense/income/transfer/credit，退款用 income。amount 是实际扣款/到账金额，保留两位小数。discount/fee 填 0 清除。
 date 输出 YYYY-MM-DD，clock 输出 HH:MM:SS；只改日期时 clock 为 null，只改时分时 date 为 null。category 放用户指定的分类名称。
 payment/target_payment 放用户说的付款/转入账户名称，明确不关联账户时填空字符串。只输出 JSON。`, Describe(d, catalog, r.Config.Location()), now.In(r.Config.Location()).Format(time.RFC3339), text)
 	var changes correctionFields

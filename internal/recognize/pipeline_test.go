@@ -205,6 +205,95 @@ func TestTransactionTimes(t *testing.T) {
 	}
 }
 
+func TestMissingListIsRetriedOnce(t *testing.T) {
+	calls := 0
+	r := &Recognizer{Config: configForTest(), Router: chatFunc(func(_ context.Context, _ openrouter.ChatRequest, out any) (*openrouter.ChatResponse, error) {
+		calls++
+		if calls == 1 {
+			return &openrouter.ChatResponse{}, decodeInto(Extraction{}, out)
+		}
+		return &openrouter.ChatResponse{}, decodeInto(Extraction{Transactions: []Fact{}, Reason: "不是交易"}, out)
+	})}
+	ds, trace, err := r.Recognize(context.Background(), Input{Image: testImage(), UploadTime: nowForTest()})
+	if err != nil || len(ds) != 0 || calls != 2 || trace.Extraction.Reason != "不是交易" {
+		t.Fatalf("calls=%d drafts=%v err=%v", calls, ds, err)
+	}
+}
+
+func TestUnusableBillRejectsOnlyItself(t *testing.T) {
+	r := &Recognizer{Config: configForTest(), Router: chatFunc(func(_ context.Context, _ openrouter.ChatRequest, out any) (*openrouter.ChatResponse, error) {
+		return &openrouter.ChatResponse{}, decodeInto(Extraction{Transactions: []Fact{
+			{Kind: KindExpense, Amount: "", AmountRole: "paid", Merchant: "看不清"},
+			{Kind: KindExpense, Amount: "8.00", AmountRole: "paid", Merchant: "便利店", Payment: "花呗"},
+		}}, out)
+	})}
+	r.Decider = decisionFunc(func(_ context.Context, req openrouter.DecisionsRequest) (*openrouter.DecisionsResponse, error) {
+		if _, ok := req.Questions["b0_asset"]; ok {
+			t.Fatal("rejected bill was matched")
+		}
+		return &openrouter.DecisionsResponse{Answers: map[string]openrouter.Answer{"b1_category": answer("cfood", .9), "b1_asset": answer("acredit", .9)}}, nil
+	})
+	ds, _, err := r.Recognize(context.Background(), Input{Image: testImage(), UploadTime: nowForTest(), Catalog: catalogForTest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ds) != 2 || ds[0].Status != "rejected" || !strings.Contains(ds[0].Reason, "金额") || ds[1].Status != "ok" || ds[1].AssetID != "credit" {
+		t.Fatalf("drafts: %+v %+v", ds[0], ds[1])
+	}
+}
+
+func TestUnreadableDateNeedsConfirmation(t *testing.T) {
+	r := &Recognizer{Config: configForTest()}
+	d, err := r.draft(Fact{Kind: KindExpense, Amount: "11.85", AmountRole: "paid", Date: "MM-DD"}, nowForTest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.Time.Equal(nowForTest()) || d.TimeSource != "upload" || !contains(d.Uncertain, "time") {
+		t.Fatalf("unexpected time: %+v", d)
+	}
+}
+
+func TestRepaymentTargetIsCreditAccount(t *testing.T) {
+	r := &Recognizer{Config: configForTest(), Decider: decisionFunc(func(_ context.Context, req openrouter.DecisionsRequest) (*openrouter.DecisionsResponse, error) {
+		target := req.Questions["b0_target_asset"].Criteria.(map[string]any)
+		if _, ok := target["abalance"]; ok || len(target) != 2 {
+			t.Fatalf("repayment target options: %v", target)
+		}
+		if len(req.Questions["b0_asset"].Criteria.(map[string]any)) != 3 {
+			t.Fatal("source should offer every account")
+		}
+		return &openrouter.DecisionsResponse{Answers: map[string]openrouter.Answer{"b0_asset": answer("abalance", .9), "b0_target_asset": answer("acredit", .9)}}, nil
+	})}
+	d := &Draft{Status: "ok", Kind: KindCredit, Money: "1200.00", Merchant: "花呗", Payment: "支付宝余额"}
+	if err := r.Match(context.Background(), []*Draft{d}, Input{Catalog: catalogForTest}, &Trace{}); err != nil {
+		t.Fatal(err)
+	}
+	if d.AssetID != "balance" || d.TargetID != "credit" {
+		t.Fatalf("unexpected match: %+v", d)
+	}
+}
+
+func TestAliasesApplyToRepayments(t *testing.T) {
+	r := &Recognizer{Config: configForTest(), Decider: decisionFunc(func(context.Context, openrouter.DecisionsRequest) (*openrouter.DecisionsResponse, error) {
+		return &openrouter.DecisionsResponse{Answers: map[string]openrouter.Answer{"b0_asset": answer("acredit", .3), "b0_target_asset": answer("none", .9)}}, nil
+	})}
+	in := Input{Catalog: catalogForTest, Memory: Memory{AssetAliases: map[string]string{"余额": "balance", "蚂蚁花呗": "credit", "不是信用": "balance"}}}
+	d := &Draft{Status: "ok", Kind: KindCredit, Money: "100.00", Payment: "余额", TargetPayment: "蚂蚁花呗"}
+	if err := r.Match(context.Background(), []*Draft{d}, in, &Trace{}); err != nil {
+		t.Fatal(err)
+	}
+	if d.AssetID != "balance" || d.TargetID != "credit" || contains(d.Uncertain, "asset") || contains(d.Uncertain, "target_asset") {
+		t.Fatalf("aliases not applied: %+v", d)
+	}
+	d = &Draft{Status: "ok", Kind: KindCredit, Money: "100.00", TargetPayment: "不是信用"}
+	if err := r.Match(context.Background(), []*Draft{d}, in, &Trace{}); err != nil {
+		t.Fatal(err)
+	}
+	if d.TargetID != "" {
+		t.Fatal("repayment went to a non-credit alias")
+	}
+}
+
 func TestCorrectionPreservesUnmentionedFields(t *testing.T) {
 	r := &Recognizer{Config: configForTest(), Router: chatFunc(func(_ context.Context, _ openrouter.ChatRequest, out any) (*openrouter.ChatResponse, error) {
 		return &openrouter.ChatResponse{}, decodeInto(map[string]any{"amount": "21.00"}, out)
