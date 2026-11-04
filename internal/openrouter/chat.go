@@ -16,6 +16,7 @@ type ChatRequest struct {
 	Model          string         `json:"model"`
 	Messages       []Message      `json:"messages"`
 	MaxTokens      int            `json:"max_tokens,omitempty"`
+	Temperature    *float64       `json:"temperature,omitempty"`
 	Reasoning      map[string]any `json:"reasoning,omitempty"`
 	ResponseFormat map[string]any `json:"response_format,omitempty"`
 	// Provider routing; require_parameters keeps requests on providers that

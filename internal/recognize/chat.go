@@ -21,7 +21,9 @@ func extractionRequest(m config.Extraction, name string, schema map[string]any, 
 		Model:     m.Model,
 		Messages:  []openrouter.Message{{Role: "user", Content: content}},
 		MaxTokens: m.MaxTokens,
-		Provider:  openrouter.Routing(m.Provider, !m.SchemaInPrompt),
+		// A pointer, so that 0 is sent rather than left to the provider.
+		Temperature: &m.Temperature,
+		Provider:    openrouter.Routing(m.Provider, !m.SchemaInPrompt),
 	}
 	if !m.SchemaInPrompt {
 		req.ResponseFormat = openrouter.JSONSchemaFormat(name, schema)

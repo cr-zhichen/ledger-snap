@@ -240,3 +240,21 @@ func TestDiscardAfterUnconfirmedWrite(t *testing.T) {
 		})
 	}
 }
+
+func TestUnusableBillDoesNotBlockOthers(t *testing.T) {
+	s, image, _ := setupRecognition(t)
+	s.Recognizer.Decider = matchingStub{allConfident: true}
+	s.Recognizer.Router = extractionStub{facts: []recognize.Fact{
+		{Kind: recognize.KindExpense, Amount: "看不清", AmountRole: "paid", Merchant: "坏的"},
+		{Kind: recognize.KindExpense, Amount: "20.00", AmountRole: "paid", Currency: "CNY", Merchant: "好的", Payment: "招行"},
+	}}
+	ctx := context.Background()
+	u, _ := s.Store.User(ctx, "u1")
+	res, err := s.Recognize(ctx, u, image, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Records) != 2 || res.Records[0].Status != "rejected" || res.Records[0].Reason == "" || res.Records[1].Status != "written" {
+		t.Fatalf("records: %+v %+v", res.Records[0], res.Records[1])
+	}
+}

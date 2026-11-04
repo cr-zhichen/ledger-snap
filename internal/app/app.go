@@ -692,9 +692,9 @@ func (s *Service) Correct(ctx context.Context, u *store.User, id, text string) (
 // corrected category needs no rule: the bill itself becomes the merchant's
 // history.
 func (s *Service) learn(ctx context.Context, u *store.User, rec *store.Record, before, after *recognize.Draft) {
-	if after.AssetID != before.AssetID && after.AssetID != "" && after.AssetID != qianji.NoID {
-		if before.Payment != "" {
-			_ = s.Store.PutAssetAlias(ctx, u.UID, before.Payment, after.AssetID, time.Now().Unix())
+	for _, c := range []struct{ text, before, after string }{{before.Payment, before.AssetID, after.AssetID}, {before.TargetPayment, before.TargetID, after.TargetID}} {
+		if c.text != "" && c.after != c.before && c.after != "" && c.after != qianji.NoID {
+			_ = s.Store.PutAssetAlias(ctx, u.UID, c.text, c.after, time.Now().Unix())
 		}
 	}
 }

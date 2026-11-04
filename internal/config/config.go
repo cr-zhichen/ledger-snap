@@ -64,10 +64,13 @@ type Extraction struct {
 	Provider        string `toml:"provider"`
 	SchemaInPrompt  bool   `toml:"schema_in_prompt"`
 	ReasoningEffort string `toml:"reasoning_effort"`
-	MaxTokens       int    `toml:"max_tokens"`
-	ImageMaxSide    int    `toml:"image_max_side"`
-	ImageMinSide    int    `toml:"image_min_side"`
-	JPEGQuality     int    `toml:"jpeg_quality"`
+	// Temperature is the sampling temperature; 0 makes the same screenshot
+	// give the same facts as far as the provider allows.
+	Temperature  float64 `toml:"temperature"`
+	MaxTokens    int     `toml:"max_tokens"`
+	ImageMaxSide int     `toml:"image_max_side"`
+	ImageMinSide int     `toml:"image_min_side"`
+	JPEGQuality  int     `toml:"jpeg_quality"`
 }
 
 type OpenRouter struct {
@@ -123,7 +126,7 @@ func Load(path string) (*Config, error) {
 	if _, err := time.LoadLocation(c.Recognize.Timezone); err != nil {
 		return nil, fmt.Errorf("recognize.timezone 无效: %w", err)
 	}
-	if c.Extraction.Model == "" || c.Extraction.MaxTokens <= 0 || c.Extraction.ImageMaxSide <= 0 || c.Extraction.JPEGQuality < 1 || c.Extraction.JPEGQuality > 100 {
+	if c.Extraction.Model == "" || c.Extraction.MaxTokens <= 0 || c.Extraction.ImageMaxSide <= 0 || c.Extraction.JPEGQuality < 1 || c.Extraction.JPEGQuality > 100 || c.Extraction.Temperature < 0 || c.Extraction.Temperature > 2 {
 		return nil, fmt.Errorf("请填写有效的 extraction 模型、输出长度和图片设置")
 	}
 	if c.Qianji.SyncWait.Duration <= 0 {

@@ -32,6 +32,8 @@ provider = "cerebras"
 schema_in_prompt = true
 # 推理强度，需使用所选模型支持的值
 reasoning_effort = "none"
+# 采样温度（0–2）；0 让同一张截图尽量得到同样的结果
+temperature = 0
 # 最大输出 token 数
 max_tokens = 8000
 # 图片最长边、最短边像素及 JPEG 质量（1–100）
@@ -50,9 +52,10 @@ app_name = "ledger-snap"
 # typesafe：直接调用 TypeSafe 官方接口（见 [typesafe]），模型为 jev-latest 或 jev-preview
 provider = "openrouter"
 model = "typesafe/jev-1.14"
+# 匹配概率低于阈值就标为拿不准；用 mise run eval -- --repeat 3 看正确和错误答案的概率分布再调整
 [decision.thresholds]
 category = 0.4
-asset = 0.4
+asset = 0.7
 
 [typesafe]
 base_url = "https://api.typesafe.ai"
