@@ -1,0 +1,22 @@
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="base.css"><style>
+/* A phone photo of another screen: tilted, slightly blurred, washed out, with glare and sensor noise. */
+body { background: #3a3a3c; }
+.shot { position: absolute; left: 20px; top: 70px; width: 393px; height: 852px; background: #ededed; transform-origin: 50% 0; transform: perspective(900px) rotateX(9deg) rotateZ(-5deg) scale(0.86); filter: blur(0.8px) contrast(0.8) brightness(1.06); }
+.glare { position: absolute; inset: 0; background: radial-gradient(ellipse at 70% 30%, rgba(255,255,255,.55), rgba(255,255,255,0) 55%); pointer-events: none; }
+.noise { position: absolute; inset: 0; opacity: .22; mix-blend-mode: multiply; }
+</style></head><body>
+<div class="shot">
+<div class="status"><span>18:23</span><span>5G 64%</span></div>
+<div class="nav"><span class="back">‹</span>支付成功</div>
+<div class="card center"><div style="font-size:16px;margin-top:10px">西贝莜面村(望京店)</div><div class="big">-186.00</div><div class="small">当前状态 支付成功</div></div>
+<div class="card">
+<div class="row"><span class="k">支付时间</span><span>2026-10-21 18:22:47</span></div>
+<div class="row"><span class="k">商品</span><span>堂食订单 4人</span></div>
+<div class="row"><span class="k">支付方式</span><span>中信银行信用卡(1234)</span></div>
+<div class="row"><span class="k">交易单号</span><span>4200002871202610211822</span></div>
+<div class="row"><span class="k">商户单号</span><span>XB1021182247093</span></div>
+</div>
+</div>
+<div class="glare"></div>
+<svg class="noise" width="100%" height="100%"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="1.6" numOctaves="2"/></filter><rect width="100%" height="100%" filter="url(#n)"/></svg>
+</body></html>
